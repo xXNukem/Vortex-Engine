@@ -1,0 +1,15 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if(@VORTEX_HAS_AUDIO_SDL@)
+    find_dependency(SDL3 CONFIG)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/VortexTargets.cmake")
+
+set(Vortex_CPU_FOUND TRUE)
+set(Vortex_Audio_FOUND TRUE)
+set(Vortex_AudioSDL_FOUND @VORTEX_HAS_AUDIO_SDL@)
+
+check_required_components(Vortex)
