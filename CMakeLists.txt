@@ -5,7 +5,7 @@ project(VortexEngine
     LANGUAGES CXX
 )
 
-option(VORTEX_ENABLE_SDL3 "Build the SDL3 audio backend" ON)
+option(VORTEX_ENABLE_SDL3 "Build the SDL3 audio and input backends" ON)
 
 if(VORTEX_ENABLE_SDL3)
     find_package(SDL3 CONFIG REQUIRED)
@@ -34,12 +34,25 @@ install(TARGETS vortex_cpu vortex_audio
 )
 
 set(VORTEX_HAS_AUDIO_SDL OFF)
+set(VORTEX_HAS_INPUT_SDL OFF)
 
 if(TARGET vortex_audio_sdl)
     set(VORTEX_HAS_AUDIO_SDL ON)
     set_target_properties(vortex_audio_sdl PROPERTIES EXPORT_NAME AudioSDL)
 
     install(TARGETS vortex_audio_sdl
+        EXPORT VortexTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+
+if(TARGET vortex_input_sdl)
+    set(VORTEX_HAS_INPUT_SDL ON)
+    set_target_properties(vortex_input_sdl PROPERTIES EXPORT_NAME InputSDL)
+
+    install(TARGETS vortex_input_sdl
         EXPORT VortexTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

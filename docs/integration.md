@@ -1,6 +1,6 @@
 # CMake integration
 
-Vortex uses CMake 3.21 or newer and requires a C++17-capable compiler. The installed package exports `Vortex::CPU`, `Vortex::Audio` and, when enabled and available, `Vortex::AudioSDL`.
+Vortex uses CMake 3.21 or newer and requires a C++17-capable compiler. The installed package exports `Vortex::CPU`, `Vortex::Audio` and, with SDL3 enabled, `Vortex::AudioSDL` and `Vortex::InputSDL`.
 
 ## Build from source
 
@@ -72,9 +72,9 @@ target_link_libraries(my_game PRIVATE
 )
 ```
 
-The exported `AudioSDL` target transitively links `Vortex::Audio` and SDL3. Vortex's installed package looks for SDL3 if it was built with `AudioSDL`, so **SDL3 must also be discoverable by the consuming CMake configuration**, even if the consumer only requests the CPU and base audio components from that particular installation. For an SDL-free installation, build Vortex with `VORTEX_ENABLE_SDL3=OFF`.
+For SDL3 input, request the `InputSDL` component and link `Vortex::InputSDL`. Both SDL3 targets link SDL3 transitively, and `AudioSDL` also links `Vortex::Audio`. SDL3 must be discoverable when loading a Vortex package built with SDL3 enabled. For an SDL-free installation, build Vortex with `VORTEX_ENABLE_SDL3=OFF`.
 
-The package supports required CMake components. Requesting `AudioSDL` from a build that does not provide it fails during `find_package()` as expected.
+Requesting `AudioSDL` or `InputSDL` as a required component from an SDL-free installation fails during `find_package()`.
 
 ## A minimal consumer project
 
@@ -108,5 +108,6 @@ When used across separate game repositories, prefer a dependency bound to a part
 - `Vortex::CPU` is a CPU framebuffer renderer; windowing and display uploads belong to the consumer.
 - `Vortex::Audio` accepts already decoded PCM; it does not load proprietary game audio formats.
 - `Vortex::AudioSDL` only handles SDL3 audio output; it is not required for graphics.
+- `Vortex::InputSDL` provides device input for a caller-owned SDL window. Event dispatch, context changes and action bindings belong to the consumer.
 
-The repository's `tests/vortex/CMakeLists.txt` provides working examples of direct target linkage. The installed-package workflow was also verified with an external consumer during extraction, using all three exported targets.
+The repository's `tests/vortex/CMakeLists.txt` provides examples of direct target linkage.

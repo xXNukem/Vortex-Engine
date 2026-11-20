@@ -1,6 +1,6 @@
 # Architecture and ownership
 
-Vortex separates reusable rendering and audio operations from game rules and resource management. Its present scope is narrower than a complete engine runtime: it provides libraries, not an executable application or an entity framework.
+Vortex provides libraries for rendering, audio and SDL input. The application owns game rules, resources and the main loop.
 
 ## Libraries
 
@@ -9,8 +9,9 @@ Vortex separates reusable rendering and audio operations from game rules and res
 | `Vortex::CPU` | `vortex::first_person::render`, `visitWallColumns`; lower-level raycasting, plane, wall and sprite APIs | No |
 | `Vortex::Audio` | `vortex::audio::Mixer` | No |
 | `Vortex::AudioSDL` | `vortex::audio::Player` | Yes; also links `Vortex::Audio` |
+| `Vortex::InputSDL` | `vortex::input::SDLInput` | Yes |
 
-The libraries are built as static targets. The CPU and mixer targets publish their headers from `include/vortex/`. The SDL3 target relies on the mixer target and the SDL3 package.
+The libraries are built as static targets and publish their headers from `include/vortex/`. The SDL3 backends use the SDL3 package, and the audio backend also links the mixer.
 
 ## Rendering data flow
 
@@ -70,6 +71,7 @@ The same sample model and `PlayOptions` are used by both routes. Decoding an ori
 - **Buffers:** The pixel vector and `RenderBuffers` are provided by the application. Reusing the scratch buffers avoids treating them as transient scene assets. Depth/coverage arrays are expressed in framebuffer coordinates.
 - **Audio sample storage:** `Mixer::setSamples()` replaces the bank, clears voices and resets statistics. Keep `Mixer` calls coordinated with whatever thread produces or consumes PCM; the base mixer API does not declare its own synchronization.
 - **SDL3 audio:** `Player` documents that lifecycle/control calls are serialized by the caller; SDL synchronizes its producer callback with control calls while the stream is open.
+- **SDL3 input:** `SDLInput` borrows one window and owns its relative capture. Use it on the SDL main thread and destroy it before destroying the window. The application polls SDL events and forwards them even when a modal UI owns presses, so releases and focus changes still reach input. After dispatch, the application supplies the desired capture state and reads input on ready frames. The supplied scancodes select which held keys to suppress across capture transitions. The host maps input to actions and determines when to invalidate a context.
 
 ## What remains in the host game
 
@@ -80,5 +82,6 @@ The same sample model and `PlayOptions` are used by both routes. Decoding an ori
 | HUD, inventory, menus, cinematics and final screen presentation | Produce a CPU framebuffer |
 | Decode compressed or proprietary sound data | Mix decoded PCM and optionally send it to SDL3 |
 | Game event and sound-trigger logic | Voice playback and looping operations |
+| Event polling, dispatch, modal ownership and game bindings | Focus, relative mouse capture and keyboard and mouse state for the supplied window |
 
 Vortex originated in [Extremis RE](https://github.com/xXNukem/Extremis-RE), but the public libraries do not require that game's assets or application code. Their current use case is a raycasting-based first-person game; there is no claim of a general-purpose polygonal 3D renderer, scripting system or physics engine.

@@ -31,4 +31,13 @@ if(TARGET SDL3::SDL3)
     add_library(Vortex::AudioSDL ALIAS vortex_audio_sdl)
     target_link_libraries(vortex_audio_sdl PUBLIC Vortex::Audio SDL3::SDL3)
     set_target_properties(vortex_audio_sdl PROPERTIES CXX_EXTENSIONS NO)
+
+    add_library(vortex_input_sdl STATIC input/sdl_input.cpp)
+    add_library(Vortex::InputSDL ALIAS vortex_input_sdl)
+    target_include_directories(vortex_input_sdl PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
+        "$<INSTALL_INTERFACE:include>")
+    target_link_libraries(vortex_input_sdl PUBLIC SDL3::SDL3)
+    target_compile_features(vortex_input_sdl PUBLIC cxx_std_17)
+    set_target_properties(vortex_input_sdl PROPERTIES CXX_EXTENSIONS NO)
 endif()

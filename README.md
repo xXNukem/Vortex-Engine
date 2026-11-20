@@ -42,6 +42,7 @@ Vortex is **not a complete game framework** or a replacement for the original lo
 | `Vortex::CPU` | CPU first-person renderer: raycasting, textured walls, floors and ceilings, sprite rendering, depth/occlusion and optional fisheye processing. | C++17 |
 | `Vortex::Audio` | PCM audio mixer with multiple voices, gain control, looping and volume ramps. | C++17 |
 | `Vortex::AudioSDL` | SDL3 output backend for audio produced by the mixer. | `Vortex::Audio`, SDL3 |
+| `Vortex::InputSDL` | Keyboard and relative mouse input for an SDL window. | SDL3 |
 
 The renderer writes to a CPU framebuffer. Presenting that framebuffer in a window, and interpreting game-specific maps, materials and resources, remain the responsibility of the host application.
 
@@ -51,7 +52,7 @@ The audio mixer operates on decoded samples. Original game sound formats and gam
 
 - C++17-compatible compiler
 - CMake 3.21 or later
-- SDL3 development libraries **only** when building the optional `AudioSDL` backend
+- SDL3 development libraries for the optional `AudioSDL` and `InputSDL` backends
 
 Development and manual validation have primarily taken place on macOS. Other platforms may require additional testing.
 
@@ -75,7 +76,7 @@ cmake --build build/cpu-only --parallel
 ctest --test-dir build/cpu-only --output-on-failure
 ```
 
-The test suite includes independent consumers for rendering and mixing, plus an SDL3 backend test when that component is enabled. These tests cover the public libraries; they are not a substitute for validation within a complete game.
+The test suite includes independent consumers for rendering and mixing, plus SDL3 audio and input tests when those components are enabled.
 
 ## Installing and using Vortex
 
@@ -96,11 +97,11 @@ target_link_libraries(my_game PRIVATE
 )
 ```
 
-If the installation includes the SDL3 backend:
+If the installation includes the SDL3 backends:
 
 ```cmake
-find_package(Vortex CONFIG REQUIRED COMPONENTS AudioSDL)
-target_link_libraries(my_game PRIVATE Vortex::AudioSDL)
+find_package(Vortex CONFIG REQUIRED COMPONENTS AudioSDL InputSDL)
+target_link_libraries(my_game PRIVATE Vortex::AudioSDL Vortex::InputSDL)
 ```
 
 An installation built with `VORTEX_ENABLE_SDL3=ON` also needs SDL3 discoverable by CMake when loading its package configuration. To distribute or consume only the CPU renderer and mixer without SDL3, use a build configured with `VORTEX_ENABLE_SDL3=OFF`.

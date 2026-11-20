@@ -1,14 +1,15 @@
 # Tests and validation
 
-The repository includes three small independent programs under [`tests/vortex/`](../tests/vortex/). These use the public Vortex headers and CMake targets; they do not depend on Extremis RE resources.
+The programs under [`tests/vortex/`](../tests/vortex/) use the public Vortex headers and CMake targets and run without game resources.
 
 | Test | Source | Main checks |
 |:--|:--|:--|
 | `vortex_cpu_scene` | [`cpu_scene.cpp`](../tests/vortex/cpu_scene.cpp) | Prepared wall segments, forced spatial index in a small room, interior occlusion, floor/ceiling planes, sprite transparency, equal-depth layering, and fisheye processing |
 | `vortex_audio_consumer` | [`audio_consumer.cpp`](../tests/vortex/audio_consumer.cpp) | Deterministic PCM values, simultaneous voice handling, sample loops, duplicate-play behaviour, statistics, stop and fade-to-silence |
 | `vortex_audio_sdl` | [`audio_sdl.cpp`](../tests/vortex/audio_sdl.cpp) | SDL3 dummy driver, pause/resume consumption, stop release, multiple player instances, idempotent close and reopen |
+| `vortex_input_sdl` | [`input_sdl.cpp`](../tests/vortex/input_sdl.cpp) | SDL3 dummy video, capture and focus transitions, modal button suppression, press and release edges, capture cleanup |
 
-The SDL3 test is registered only if `Vortex::AudioSDL` exists; the other two require only C++17 and the corresponding Vortex libraries.
+The SDL3 tests are registered when their corresponding targets exist. The input test skips if the dummy driver cannot provide focused relative capture.
 
 ## Running tests
 
@@ -30,7 +31,7 @@ cmake --build build/cpu-only --parallel
 ctest --test-dir build/cpu-only --output-on-failure
 ```
 
-After changing public headers, CMake target properties or installation rules, verify the installed package too: install into a temporary prefix, configure an independent project with `find_package(Vortex CONFIG REQUIRED ...)`, and link the relevant targets. In the extraction workflow, this was tested for all three components.
+After changing public headers, CMake target properties or installation rules, install into a temporary prefix and link the relevant targets from an independent project using `find_package(Vortex CONFIG REQUIRED ...)`.
 
 ## What the tests do not claim
 
