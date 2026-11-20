@@ -1,7 +1,10 @@
-#include "vortex/render/first_person/scene_renderer.h"
+#include "vortex/render/first_person/render_workers.h"
 
-#include "vortex/render/first_person/planes/plane_renderer.h"
-#include "vortex/render/first_person/sprites/sprite_renderer.h"
+#include "../worker_pool.h"
+#include "planes/plane_pass.h"
+#include "postprocess/fisheye_pass.h"
+#include "raycast/grid_query.h"
+#include "sprites/sprite_pass.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,8 +39,8 @@ private:
     std::uint64_t start_;
 };
 
-template <bool Timed, typename Visitor>
-bool walkColumns(const View& view, Visitor visit, const Timing& timing)
+template <bool Timed, bool ParallelGrid = false, typename Visitor>
+bool walkColumns(const View& view, Visitor visit, const Timing& timing, int begin, int end)
 {
     const auto& p = view.projection;
     const Point origin{view.camera.x, view.camera.y};
@@ -48,13 +51,16 @@ bool walkColumns(const View& view, Visitor visit, const Timing& timing)
         if (view.grid) backtrack = view.grid->backtrack(origin);
     }
 
-    for (int column = 0; column < p.width; ++column) {
+    for (int column = begin; column < end; ++column) {
         const auto hit = [&] {
             VORTEX_MEASURE(Rays);
             const auto direction = columnRay(p, column);
             const Sample<Timed> sample(timing, Stage::Rays);
-            return view.grid ? view.grid->cast(view.scene, origin, direction, backtrack)
-                             : castPreparedSceneRay(view.scene, direction);
+            if (!view.grid) return castPreparedSceneRay(view.scene, direction);
+            if constexpr (ParallelGrid)
+                return detail::GridQuery::cast(*view.grid, view.scene, origin, direction, backtrack);
+            else
+                return view.grid->cast(view.scene, origin, direction, backtrack);
         }();
         if (!std::isfinite(hit.distance)) continue;
         const auto projected = [&] {
@@ -68,7 +74,7 @@ bool walkColumns(const View& view, Visitor visit, const Timing& timing)
 
 template <bool Timed>
 bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uint32_t>& pixels,
-                 RenderBuffers& buffers, const Timing& timing)
+                 RenderBuffers& buffers, const Timing& timing, detail::WorkerPool* pool = nullptr)
 {
     const auto& p = view.projection;
     if (p.width <= 0 || p.height <= 0) return false;
@@ -93,7 +99,7 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
         buffers.wallCoverage.assign(std::size_t(p.width), {p.height, 0});
     }
 
-    walkColumns<Timed>(view, [&](int column, const RayHit& hit, const ProjectedColumn& projected) {
+    const auto drawWall = [&](int column, const RayHit& hit, const ProjectedColumn& projected) {
         const auto material = [&] {
             VORTEX_MEASURE(Material);
             return style.wallMaterial ? style.wallMaterial(style.wallContext, hit) : WallSample{};
@@ -110,22 +116,32 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
         }
         if (style.planes) buffers.wallCoverage[column] = rows;
         return true;
-    }, timing);
+    };
+    if (pool && p.width > 64) {
+        detail::forRanges(pool, p.width, 64, [&](std::size_t begin, std::size_t end) {
+            walkColumns<Timed, true>(view, drawWall, timing, int(begin), int(end));
+        });
+    } else {
+        walkColumns<Timed>(view, drawWall, timing, 0, p.width);
+    }
 
     if (requiresDepth) {
         VORTEX_MEASURE(Depth);
         VORTEX_MEASURE(DepthExpand);
         const Sample<Timed> sample(timing, Stage::Walls);
-        for (int y = 1; y < p.height; ++y)
-            std::copy_n(depth.data(), p.width, depth.data() + std::size_t(y) * p.width);
+        const auto rowsPerTask = std::max<std::size_t>(4, 32768 / p.width);
+        detail::forRanges(pool, p.height - 1, rowsPerTask, [&](std::size_t begin, std::size_t end) {
+            for (auto row = begin; row < end; ++row)
+                std::copy_n(depth.data(), p.width, depth.data() + (row + 1) * p.width);
+        });
     }
 
     if (style.planes) {
         VORTEX_MEASURE(Planes);
         const Sample<Timed> sample(timing, Stage::Planes);
-        planes::render(pixels, view.camera,
-                       {p.width, p.height, view.planeAndSpriteFocal, p.eyeHeight, view.wallHeight},
-                       *style.planes, style.planeRepeat, &buffers.wallCoverage);
+        planes::renderPass(pixels, view.camera,
+                           {p.width, p.height, view.planeAndSpriteFocal, p.eyeHeight, view.wallHeight},
+                           *style.planes, style.planeRepeat, &buffers.wallCoverage, pool);
     }
 
     const Sample<Timed> sample(timing, Stage::Sprites);
@@ -142,14 +158,13 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
             const auto& layer = style.layers[i];
             if (!layer.bank || !layer.objects) continue;
             if (style.observeLayer) style.observeLayer(style.layerContext, i, false, pixels);
-            sprites::render(pixels, depth, *layer.bank, *layer.objects, view.camera, projection,
-                            sprites::DepthInput::NoNaN);
+            sprites::renderPass(pixels, depth, *layer.bank, *layer.objects, view.camera, projection, pool);
             if (style.observeLayer) style.observeLayer(style.layerContext, i, true, pixels);
         }
     }
 
     VORTEX_MEASURE(Fisheye);
-    return !style.fisheye || style.fisheye->apply(pixels, p.width, p.height);
+    return !style.fisheye || detail::FisheyePass::apply(*style.fisheye, pixels, p.width, p.height, pool);
 }
 
 } // namespace
@@ -159,8 +174,8 @@ bool visitWallColumns(const View& view, ColumnVisitor visitor, void* context, Ti
     const auto visit = [&](int column, const RayHit& hit, const ProjectedColumn& projected) {
         return visitor(context, column, hit, projected);
     };
-    if (timing.now && timing.sample) return walkColumns<true>(view, visit, timing);
-    return walkColumns<false>(view, visit, timing);
+    if (timing.now && timing.sample) return walkColumns<true>(view, visit, timing, 0, view.projection.width);
+    return walkColumns<false>(view, visit, timing, 0, view.projection.width);
 }
 
 void fillBackground(std::vector<std::uint32_t>& pixels, int width, int height,
@@ -184,6 +199,25 @@ bool render(const View& view, const SceneStyle& style, std::vector<std::uint32_t
 {
     if (timing.now && timing.sample) return renderScene<true>(view, style, pixels, buffers, timing);
     return renderScene<false>(view, style, pixels, buffers, timing);
+}
+
+RenderWorkers::RenderWorkers(unsigned threadCount)
+{
+    if (threadCount == 0) threadCount = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
+    if (threadCount > 1) pool_ = std::make_unique<detail::WorkerPool>(threadCount);
+}
+
+RenderWorkers::~RenderWorkers() = default;
+
+bool RenderWorkers::render(const View& view, const SceneStyle& style,
+                           std::vector<std::uint32_t>& pixels, RenderBuffers& buffers)
+{
+#ifdef VORTEX_RENDER_PROFILE
+    // The standalone profiler uses process-wide counters and allocation probes.
+    return renderScene<false>(view, style, pixels, buffers, {});
+#else
+    return renderScene<false>(view, style, pixels, buffers, {}, pool_.get());
+#endif
 }
 
 } // namespace vortex::first_person

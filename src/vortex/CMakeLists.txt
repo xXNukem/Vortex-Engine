@@ -1,4 +1,7 @@
+find_package(Threads REQUIRED)
+
 add_library(vortex_cpu STATIC
+    render/worker_pool.cpp
     render/first_person/scene_renderer.cpp
     render/first_person/raycast/raycast.cpp
     render/first_person/walls/wall_raster.cpp
@@ -11,6 +14,7 @@ add_library(Vortex::CPU ALIAS vortex_cpu)
 target_include_directories(vortex_cpu PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
     "$<INSTALL_INTERFACE:include>")
+target_link_libraries(vortex_cpu PRIVATE Threads::Threads)
 target_compile_features(vortex_cpu PUBLIC cxx_std_17)
 set_target_properties(vortex_cpu PROPERTIES CXX_EXTENSIONS NO)
 

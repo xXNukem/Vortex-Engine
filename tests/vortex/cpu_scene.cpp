@@ -1,16 +1,21 @@
-#include "vortex/render/first_person/scene_renderer.h"
+#include "vortex/render/first_person/render_workers.h"
 #include "vortex/render/first_person/planes/plane_renderer.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -301,13 +306,159 @@ void renderScene()
     expect(color.front() == ceilingColor && color.back() == floorColor &&
            color[pixel(width / 2, height / 2)] == unwarped[pixel(width / 2, height / 2)],
            "Fisheye moved an invariant sample");
+
+    cpu::RenderWorkers workers{4};
+    cpu::RenderWorkers single{1};
+    std::vector<std::uint32_t> parallelColor;
+    cpu::RenderBuffers parallelBuffers;
+    for (int frame = 0; frame < 4; ++frame) {
+        auto larger = view;
+        larger.projection.width = frame == 2 ? 777 : 641;
+        larger.projection.height = 481;
+        larger.projection.focal = larger.planeAndSpriteFocal = 390;
+        larger.projection.plane = larger.projection.width / (2 * larger.projection.focal);
+        if (frame == 1) larger.grid = nullptr;
+
+        struct Observation {
+            std::thread::id caller = std::this_thread::get_id();
+            std::vector<std::vector<std::uint32_t>> layers;
+        } observation;
+        style.layerContext = &observation;
+        style.observeLayer = [](void* context, std::size_t layer, bool after, const auto& pixels) {
+            auto& state = *static_cast<Observation*>(context);
+            expect(std::this_thread::get_id() == state.caller, "Observer left the calling thread");
+            expect(state.layers.size() == layer * 2 + after, "Observer order changed");
+            state.layers.push_back(pixels);
+        };
+        expect(cpu::render(larger, style, color, buffers), "Serial reference render failed");
+        const auto expectedLayers = std::move(observation.layers);
+        observation.layers.clear();
+        auto& execution = frame == 3 ? single : workers;
+        expect(execution.render(larger, style, parallelColor, parallelBuffers), "Worker render failed");
+        expect(parallelColor == color && parallelBuffers.depth == buffers.depth &&
+               parallelBuffers.wallCoverage == buffers.wallCoverage &&
+               parallelBuffers.wallDepthColumns == buffers.wallDepthColumns &&
+               observation.layers == expectedLayers, "Worker render changed frame or layer output");
+    }
+
+    style.observeLayer = nullptr;
+    const auto material = style.wallMaterial;
+    std::atomic<unsigned> workerCalls{0};
+    const auto caller = std::this_thread::get_id();
+    const auto context = std::pair{&workerCalls, caller};
+    style.wallContext = &context;
+    style.wallMaterial = [](const void* opaque, const vortex::RayHit&) -> cpu::WallSample {
+        const auto& [calls, callingThread] = *static_cast<const decltype(context)*>(opaque);
+        if (std::this_thread::get_id() != callingThread) {
+            ++*calls;
+            throw std::logic_error("Material callback failed");
+        }
+        return {};
+    };
+    auto wide = view;
+    wide.projection.width = 641;
+    bool raised = false;
+    try {
+        workers.render(wide, style, parallelColor, parallelBuffers);
+    } catch (const std::logic_error&) {
+        raised = true;
+    }
+    expect(raised && workerCalls > 0, "Worker exception did not reach the caller");
+    style.wallMaterial = material;
+    style.wallContext = &wall;
+    expect(workers.render(wide, style, parallelColor, parallelBuffers), "Workers did not recover");
 }
+
+void verifySpriteWorkers(unsigned threads)
+{
+    namespace cpu = vortex::first_person;
+    using vortex::sprites::Instance;
+    using vortex::sprites::Bank;
+    const vortex::PreparedRayScene scene{{vortex::prepareRaySurface({100, -2000}, {100, 2000},
+                                                                   {0, 0}, 1, 1)}, {}};
+    Bank bank{{
+        {{2, 2, {{220, 31, 80}, {12, 150, 70}, {27, 90, 65}, {55, 27, 190}}}, 1, 1, {0, 1, 2, 1}},
+        {{2, 2, std::vector<vortex::Rgb>(4, {114, 36, 180})}, 1, 1, {1, 1, 1, 1}},
+    }};
+    const auto original = bank;
+    std::vector<Instance> objects{
+        {99.5, 0, 30, 90, 0, true, false, true},
+        {100, 0, 20, 95, 1},
+        {97, 10, 22, 110, 1},
+        {98, 10, 22, 104, 0},
+        {97, 10, 22, 110, 0, true, false, false, true},
+    };
+    for (int i = 0; i < 270; ++i)
+        objects.push_back({56.0 + (i % 20), (i % 13 - 6) * 3.5, 18.0 + i % 7,
+                           35.0 + i % 16, 0, bool(i % 2), bool(i % 3)});
+    // This impact probes the live depth from preceding overlapping sprites.
+    objects.push_back({58, 3, 21, 35, 0, false, false, true});
+    const std::vector<Instance> overlays{{56, 0, 22, 44, 0, false, false, false, true},
+                                         {45, -15, 20, 30, 1}};
+    const cpu::SpriteLayer layers[] = {{&bank, &objects}, {nullptr, nullptr}, {&bank, &overlays}};
+    struct Observation {
+        Bank* bank;
+        cpu::RenderBuffers* buffers;
+        std::thread::id caller;
+        std::vector<std::vector<std::uint32_t>> colors;
+        std::vector<std::vector<double>> depths;
+    } state{&bank, nullptr, std::this_thread::get_id(), {}, {}};
+    cpu::SceneStyle style;
+    style.layers = layers;
+    style.layerCount = std::size(layers);
+    style.layerContext = &state;
+    style.observeLayer = [](void* context, std::size_t layer, bool after, const auto& pixels) {
+        auto& observation = *static_cast<Observation*>(context);
+        expect(observation.caller == std::this_thread::get_id(), "Sprite observer left caller");
+        expect(observation.colors.size() == layer + after, "Sprite layer boundary changed");
+        observation.colors.push_back(pixels);
+        observation.depths.push_back(observation.buffers->depth);
+        // The following batch must read the newly edited indices and texture.
+        auto& image = observation.bank->images[0];
+        image.indices[0] ^= 1;
+        image.texture.pixels[0].b ^= 0xff;
+    };
+    const auto sameDepth = [](const auto& left, const auto& right) {
+        return left.size() == right.size() &&
+               std::memcmp(left.data(), right.data(), left.size() * sizeof(double)) == 0;
+    };
+    cpu::RenderWorkers workers{threads};
+    cpu::RenderBuffers serial, parallel;
+    std::vector<std::uint32_t> reference, candidate;
+    for (const auto& size : {std::pair{641, 481}, {319, 203}, {777, 483}}) {
+        const auto w = size.first, h = size.second;
+        const double focal = w * .65;
+        const cpu::View view{{0, 0, 0}, {w, h, 1, 0, w * .5 / focal, focal, 30},
+                             64, focal, scene};
+        state.buffers = &serial;
+        expect(cpu::render(view, style, reference, serial), "Sprite serial render failed");
+        const auto layerColors = std::move(state.colors);
+        const auto layerDepths = std::move(state.depths);
+        state.colors.clear();
+        state.depths.clear();
+        bank = original;
+        state.buffers = &parallel;
+        expect(workers.render(view, style, candidate, parallel), "Sprite worker render failed");
+        expect(reference == candidate && sameDepth(serial.depth, parallel.depth) &&
+               serial.wallDepthColumns == parallel.wallDepthColumns &&
+               state.colors == layerColors, "Worker sprite output changed");
+        for (std::size_t i = 0; i < layerDepths.size(); ++i)
+            expect(sameDepth(layerDepths[i], state.depths[i]), "Observer depth bits changed");
+        state.colors.clear();
+        state.depths.clear();
+        bank = original;
+    }
+}
+
 }
 
 int main()
 {
     try {
         renderScene();
+        auto otherInstance = std::async(std::launch::async, verifySpriteWorkers, 2);
+        verifySpriteWorkers(4);
+        otherInstance.get();
         renderPlaneCoverage();
         samplePlaneTileBoundaries();
         applyFisheye();

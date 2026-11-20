@@ -59,6 +59,59 @@ int main()
 
 `fp::render()` returns a success flag. `View::wallHeight` and `planeAndSpriteFocal` are explicit so applications can retain their chosen projection and rounding conventions. The example deliberately uses the unindexed raycasting path (`View::grid == nullptr`).
 
+## Multicore rendering
+
+Create one `first_person::RenderWorkers` from
+[`render_workers.h`](../include/vortex/render/first_person/render_workers.h)
+and reuse it between frames:
+
+```cpp
+vortex::first_person::RenderWorkers workers{4};
+// For each frame:
+workers.render(view, style, pixels, buffers);
+```
+
+The thread count includes the calling thread. Passing one runs on the calling
+thread. Passing zero selects the reported hardware concurrency, bounded to one
+through eight threads. Calls on a worker instance must be serialized. Each call
+returns after all workers finish using its inputs and buffers.
+
+The wall material resolver may be called concurrently and in any column order.
+Its returned textures must stay valid and immutable throughout the wall pass.
+Keep any mutable callback context synchronized. Use `first_person::render()`
+for ordered wall callbacks and `Timing`.
+
+Layer observers run on the calling thread before and after each active sprite
+layer. The previous work has joined before the callback, and sprite preparation
+starts after the callback returns. A caller can use these boundaries to inspect
+the frame or update textures and indices for the next layer. Keep the inputs
+to a layer stable while it runs.
+
+Rays and walls use disjoint column ranges. Depth expansion and textured planes
+use row ranges. Fisheye builds its lookup by rows and warps into disjoint
+regions of its existing destination buffer. Indexed casts share the grid
+geometry and keep temporary intersection data per thread in the parallel pass.
+
+Sprite preparation projects and clips in input order, applies the S02
+opaque-rectangle and wall-column gates, and builds shared horizontal sampling
+runs. Large batches rasterize into disjoint row bands of color and depth, with
+each band visiting sprites in input order. Subdividing large bands keeps the
+working set of color and depth rows in cache. Small batches use the calling
+thread. A wall impact first resolves the wall slope against live depth after
+preceding sprites finish. It can then rasterize its own rows in parallel.
+Batches and layers join before the next one starts. All stages use the same
+rasterization code as the serial entry point.
+
+The release benchmark accepts a thread count as its fourth argument. An
+explicit count compares frame and layer output without the ordered wall trace.
+The CSV reports elapsed render time and process CPU time separately.
+
+```sh
+vortex_render_benchmark time 31 mixed 4
+vortex_render_benchmark write mixed.bin mixed 1
+vortex_render_benchmark verify mixed.bin mixed 4
+```
+
 ## Supplying a scene
 
 1. Collect the wall segments and the game-defined `uint16_t` material IDs.

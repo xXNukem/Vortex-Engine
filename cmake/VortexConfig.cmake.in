@@ -1,6 +1,7 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+find_dependency(Threads)
 
 if(@VORTEX_HAS_AUDIO_SDL@)
     find_dependency(SDL3 CONFIG)

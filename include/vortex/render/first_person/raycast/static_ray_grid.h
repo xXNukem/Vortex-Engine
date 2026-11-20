@@ -5,6 +5,7 @@
 #include <cstddef>
 
 namespace vortex {
+namespace detail { struct GridQuery; }
 class StaticRayGrid {
 public:
     // Small scenes favor the contiguous prepared scan. The forced path is used
@@ -28,6 +29,12 @@ public:
                 unsigned* visitedCells = nullptr, std::size_t* testedWalls = nullptr);
 
 private:
+    friend struct detail::GridQuery;
+    struct Scratch {
+        std::uint64_t* masks;
+        std::uint64_t* hitMasks;
+        SegmentHit* intersections;
+    };
     struct SegmentBounds;
     struct SegmentVisitor {
         SegmentBounds* bounds;
@@ -50,8 +57,12 @@ private:
     static bool clipAxis(double start, double speed, double low, double high,
                          double& entry, double& exit);
 
+    RayHit castWithScratch(const PreparedRayScene& scene, Point camera, Point direction,
+                          double backtrack, unsigned* visitedCells, std::size_t* testedWalls,
+                          Scratch scratch) const;
     unsigned collect(Point camera, Point direction, double backtrack,
-                     const PreparedRaySurface* walls, std::size_t* testedWalls);
+                     const PreparedRaySurface* walls, std::size_t* testedWalls,
+                     Scratch scratch) const;
 
     Point origin_{};
     int width_ = 0, height_ = 0;

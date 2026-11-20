@@ -5,6 +5,8 @@
 #include <vector>
 
 namespace vortex {
+namespace detail { struct FisheyePass; }
+
 class FisheyeEffect {
 public:
     struct Settings {
@@ -18,6 +20,8 @@ public:
     bool apply(std::vector<std::uint32_t>& pixels, int width, int height);
 
 private:
+    friend struct detail::FisheyePass;
+
     Settings settings_;
     int width_ = 0, height_ = 0;
     std::vector<std::size_t> lookup_;

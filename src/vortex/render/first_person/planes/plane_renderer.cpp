@@ -1,4 +1,6 @@
-#include "vortex/render/first_person/planes/plane_renderer.h"
+#include "plane_pass.h"
+
+#include "../../worker_pool.h"
 
 #include "plane_sampling.h"
 
@@ -123,9 +125,9 @@ std::optional<Row> projectRow(const CameraPose& camera, const Projection& p, int
                forwardY * step, -forwardX * step, depth, ceiling};
 }
 
-void render(std::vector<std::uint32_t>& pixels, const CameraPose& camera,
-            const Projection& p, const PlaneBank& materials, double repeatPeriod,
-            const std::vector<std::pair<int,int>>* wallCoverage)
+void renderPass(std::vector<std::uint32_t>& pixels, const CameraPose& camera,
+                const Projection& p, const PlaneBank& materials, double repeatPeriod,
+                const std::vector<std::pair<int, int>>* wallCoverage, detail::WorkerPool* pool)
 {
     if (p.width <= 0 || p.height <= 0 || pixels.size() != std::size_t(p.width) * p.height) return;
     if (wallCoverage && wallCoverage->size() != std::size_t(p.width)) return;
@@ -153,12 +155,24 @@ void render(std::vector<std::uint32_t>& pixels, const CameraPose& camera,
         }
     }
     const auto* coverage = wallCoverage ? wallCoverage->data() : nullptr;
-    for (int y = 0; y < p.height; ++y) {
-        const auto row = projectRow(camera, p, y);
-        if (!row) continue;
-        const auto& texture = plane_material::select(materials, row->ceiling);
-        if (validTexture(texture)) renderRow(pixels.data() + std::size_t(y) * p.width,
-                                       p.width, y, *row, texture, sampling, coverage, blocks);
-    }
+    const auto rowsPerTask = std::max<std::size_t>(4, 16384 / p.width);
+    detail::forRanges(pool, p.height, rowsPerTask, [&](std::size_t begin, std::size_t end) {
+        for (int y = int(begin); y < int(end); ++y) {
+            const auto row = projectRow(camera, p, y);
+            if (!row) continue;
+            const auto& texture = plane_material::select(materials, row->ceiling);
+            if (validTexture(texture))
+                renderRow(pixels.data() + std::size_t(y) * p.width,
+                          p.width, y, *row, texture, sampling, coverage, blocks);
+        }
+    });
 }
+
+void render(std::vector<std::uint32_t>& pixels, const CameraPose& camera,
+            const Projection& p, const PlaneBank& materials, double repeatPeriod,
+            const std::vector<std::pair<int, int>>* wallCoverage)
+{
+    renderPass(pixels, camera, p, materials, repeatPeriod, wallCoverage, nullptr);
+}
+
 } // namespace vortex::planes

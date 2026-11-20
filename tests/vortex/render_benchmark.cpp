@@ -1,4 +1,4 @@
-#include "vortex/render/first_person/scene_renderer.h"
+#include "vortex/render/first_person/render_workers.h"
 #include "vortex/render/first_person/sprites/sprite_renderer.h"
 #include "render_profile.h"
 
@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -315,7 +316,8 @@ void verifyDirectSprites(Frames& frames)
     frames.vector(depth);
 }
 
-void measure(const Case& scene, int width, int height, int samples, Frames* frames)
+void measure(const Case& scene, int width, int height, int samples, Frames* frames,
+             RenderWorkers& workers, bool recordWalls)
 {
     const auto walls = makeGeometry(scene);
     StaticRayGrid grid([&](auto visit) {
@@ -415,7 +417,8 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
                                  width * .5 / focal, focal, scene.height * .43},
                         scene.height, focal, prepared, scene.grid ? &grid : nullptr};
         const auto prepare = nanos(prepareStart);
-        materials.frames = observation.frames = sample >= -3 ? frames : nullptr;
+        observation.frames = sample >= -3 ? frames : nullptr;
+        materials.frames = recordWalls ? observation.frames : nullptr;
         observation.spriteTime = 0;
 #ifdef VORTEX_RENDER_PROFILE
         std::fill_n(render_profile::times, render_profile::Count, 0);
@@ -425,9 +428,11 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
         const auto startAllocations = allocationCount;
         peakBytes = liveBytes;
 #endif
+        const auto cpuStart = std::clock();
         const auto start = Clock::now();
-        if (!render(view, style, pixels, buffers)) throw std::runtime_error("render failed");
+        if (!workers.render(view, style, pixels, buffers)) throw std::runtime_error("render failed");
         const auto total = nanos(start);
+        const auto cpuTotal = std::clock() - cpuStart;
 #ifdef VORTEX_RENDER_PROFILE
         const auto retained = liveBytes - emptyFrameBytes;
         const auto transient = peakBytes - std::max(startBytes, liveBytes);
@@ -447,7 +452,8 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
         if (sample < 0 && sample != -6) continue;
         if (frames) continue;
         std::cout << scene.name << ',' << width << ',' << height << ',' << sample << ','
-                  << prepare << ',' << total << ',' << observation.spriteTime;
+                  << prepare << ',' << total << ',' << observation.spriteTime
+                  << ',' << std::uint64_t(double(cpuTotal) * 1e9 / CLOCKS_PER_SEC);
 #ifdef VORTEX_RENDER_PROFILE
         for (auto time : render_profile::times) std::cout << ',' << time;
         for (auto count : render_profile::work) std::cout << ',' << count;
@@ -469,14 +475,23 @@ try {
     render_profile::probeEnabled = mode == "probe";
     timing = timing || render_profile::probeEnabled;
 #endif
-    if ((!timing && mode != "write" && mode != "verify") || argc > 4 ||
+    if ((!timing && mode != "write" && mode != "verify") || argc > 5 ||
         (!timing && argc < 3)) return 1;
     const int samples = timing && argc >= 3 ? std::stoi(argv[2]) : 31;
     if (samples < 1) return 1;
-    const std::string_view filter = argc == 4 ? argv[3] : "";
+    const std::string_view filter = argc >= 4 ? argv[3] : "";
+    // An explicit thread count selects frame/layer comparison without the ordered
+    // wall trace, which is part of the original serial benchmark format.
+    const bool recordWalls = argc < 5;
+    const int threads = recordWalls ? 1 : std::stoi(argv[4]);
+    if (threads < 0) return 1;
+#ifdef VORTEX_RENDER_PROFILE
+    if (threads != 1) return 1;
+#endif
+    RenderWorkers workers{static_cast<unsigned>(threads)};
     Frames frames = timing ? Frames{} : Frames{mode, argv[2]};
     if (timing) {
-        std::cout << "scene,width,height,sample,prepare_ns,total_ns,layer_sprite_ns";
+        std::cout << "scene,width,height,sample,prepare_ns,total_ns,layer_sprite_ns,process_cpu_ns";
 #ifdef VORTEX_RENDER_PROFILE
         std::cout << ",setup_ns,rays_ns,projection_ns,material_ns,walls_ns,planes_ns,depth_ns,"
                      "sprites_ns,fisheye_ns,sprite_project_ns,sprite_clip_ns,sprite_runs_ns,"
@@ -496,7 +511,7 @@ try {
         for (const auto& scene : cases) {
             if (std::string_view(scene.name).substr(0, filter.size()) != filter)
                 continue;
-            measure(scene, width, height, samples, timing ? nullptr : &frames);
+            measure(scene, width, height, samples, timing ? nullptr : &frames, workers, recordWalls);
         }
     }
     if (!timing) verifyDirectSprites(frames);

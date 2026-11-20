@@ -1,4 +1,4 @@
-#include "vortex/render/first_person/raycast/static_ray_grid.h"
+#include "grid_query.h"
 
 #include <algorithm>
 #include <cmath>
@@ -161,6 +161,29 @@ double StaticRayGrid::backtrack(const Point& camera) const
 RayHit StaticRayGrid::cast(const PreparedRayScene& scene, const Point& camera, Point direction, double backtrack,
                           unsigned* visitedCells, std::size_t* testedWalls)
 {
+    return castWithScratch(scene, camera, direction, backtrack, visitedCells, testedWalls,
+                           {masks_.data(), hitMasks_.data(), intersections_.data()});
+}
+
+RayHit detail::GridQuery::cast(const StaticRayGrid& grid, const PreparedRayScene& scene,
+                              Point camera, Point direction, double backtrack)
+{
+    struct Storage {
+        std::vector<std::uint64_t> masks, hitMasks;
+        std::vector<SegmentHit> intersections;
+    };
+    thread_local Storage storage;
+    storage.masks.resize(grid.masks_.size());
+    storage.hitMasks.resize(grid.hitMasks_.size());
+    storage.intersections.resize(grid.wallCount_);
+    return grid.castWithScratch(scene, camera, direction, backtrack, nullptr, nullptr,
+                                {storage.masks.data(), storage.hitMasks.data(), storage.intersections.data()});
+}
+
+RayHit StaticRayGrid::castWithScratch(const PreparedRayScene& scene, Point camera, Point direction,
+                                     double backtrack, unsigned* visitedCells, std::size_t* testedWalls,
+                                     Scratch scratch) const
+{
     const double magnitude = std::max(std::abs(direction.x), std::abs(direction.y));
     if (!valid() || wallCount_ != scene.walls.size() ||
         !(std::abs(camera.x) <= 262144 && std::abs(camera.y) <= 262144 &&
@@ -170,18 +193,18 @@ RayHit StaticRayGrid::cast(const PreparedRayScene& scene, const Point& camera, P
         return castPreparedSceneRay(scene, direction);
     }
 
-    std::fill(masks_.begin(), masks_.end(), 0);
-    std::fill(hitMasks_.begin(), hitMasks_.end(), 0);
+    std::fill_n(scratch.masks, masks_.size(), 0);
+    std::fill_n(scratch.hitMasks, hitMasks_.size(), 0);
     const auto* walls = scene.walls.data();
-    const auto count = collect(camera, direction, backtrack, walls, testedWalls);
+    const auto count = collect(camera, direction, backtrack, walls, testedWalls, scratch);
     if (visitedCells) *visitedCells += count;
     RayHit hit{std::numeric_limits<double>::infinity(), 0};
     bool hitFacesCamera = false;
     // Replay only accepted intersections in the original wall order.
     for (std::size_t block = 0; block < hitMasks_.size(); ++block) {
-        for (auto bits = hitMasks_[block]; bits; bits &= bits - 1) {
+        for (auto bits = scratch.hitMasks[block]; bits; bits &= bits - 1) {
             const auto id = block * 64 + firstBit(bits);
-            considerWallHit(hit, hitFacesCamera, walls[id], intersections_[id]);
+            considerWallHit(hit, hitFacesCamera, walls[id], scratch.intersections[id]);
         }
     }
     return castDynamicSurfaces(scene, direction, hit);
@@ -214,7 +237,7 @@ bool StaticRayGrid::clipAxis(double start, double speed, double low, double high
 }
 
 unsigned StaticRayGrid::collect(Point camera, Point direction, double backtrack,
-                 const PreparedRaySurface* walls, std::size_t* testedWalls)
+                 const PreparedRaySurface* walls, std::size_t* testedWalls, Scratch scratch) const
 {
     double entry = -backtrack, exit = INFINITY;
     if (!clipAxis(camera.x, direction.x, origin_.x, origin_.x + width_ * cellSize, entry, exit) ||
@@ -238,9 +261,9 @@ unsigned StaticRayGrid::collect(Point camera, Point direction, double backtrack,
     // (the same bound used by backtrack) and for grid crossing roundoff.
     const double margin = 2 * backtrack - entry;
     const double tieSteps = 4 * rayTieTolerance * wallCount_;
-    auto* seen = masks_.data();
-    auto* accepted = hitMasks_.data();
-    auto* intersections = intersections_.data();
+    auto* seen = scratch.masks;
+    auto* accepted = scratch.hitMasks;
+    auto* intersections = scratch.intersections;
     do {
         ++count;
         for (const auto& mask : cells_[std::size_t(y) * width_ + x]) {
