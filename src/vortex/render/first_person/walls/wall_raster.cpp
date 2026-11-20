@@ -59,30 +59,43 @@ std::pair<int, int> rasterizeWallColumn(
         for (int y = 0; y < height; ++y)
             (*depth)[std::size_t(y) * width + column] = wallDistance;
     }
-    if (cachedShade) {
-        // Use the exact clipped-column sampler with a fixed texture height,
-        // no per-pixel material branch, and a single stride increment.
-        const auto* colors = shadedTexels.data();
+    // For tall adjacent columns, start the next column at the end just written
+    // so it can reuse framebuffer cache lines before they are evicted.
+    constexpr int reverseMinRows = 512;
+    const bool reverse = (column % 2 != 0) && end - begin >= reverseMinRows;
+    const auto drawRows = [&](auto sample) {
         auto* output = pixels.data();
-        auto offset = std::size_t(begin) * width + column;
-        for (int y = begin; y < end; ++y, offset += width) {
+        const auto stride = std::size_t(width);
+        if (!reverse) {
+            auto offset = std::size_t(begin) * width + column;
+            for (int y = begin; y < end; ++y, offset += stride)
+                output[offset] = sample(y);
+        } else {
+            auto offset = std::size_t(end) * width + column;
+            for (int y = end; y > begin;) {
+                --y;
+                offset -= stride;
+                output[offset] = sample(y);
+            }
+        }
+    };
+    // Sample the unclipped projection in both directions so clipping only crops.
+    if (cachedShade) {
+        drawRows([&](int y) {
             const double v = (y + 0.5 - projected.unclippedTop) / projectedHeight;
             const int texelY = int(v * cachedRows);
             const int row = texelY < 0 ? 0 : texelY >= cachedRows ? cachedRows - 1 : texelY;
-            output[offset] = colors[row];
-        }
-        return {begin, end};
-    }
-    for (int y = begin; y < end; ++y) {
-        auto pixel = flatPixel;
-        if (texture) {
-            // Use the original projected extent: clipping crops rather than stretching.
+            return shadedTexels[row];
+        });
+    } else if (texture) {
+        drawRows([&](int y) {
             const double v = (y + 0.5 - projected.unclippedTop) / projectedHeight;
             const int textureY = std::clamp(int(v * texture->height), 0, texture->height - 1);
             const auto color = texture->pixels[std::size_t(textureY) * texture->width + textureX];
-            pixel = rgbaPixel(color, shade);
-        }
-        pixels[std::size_t(y) * width + column] = pixel;
+            return rgbaPixel(color, shade);
+        });
+    } else {
+        drawRows([&](int) { return flatPixel; });
     }
     return {begin, end};
 }

@@ -71,6 +71,38 @@ void renderPlaneCoverage()
     }
 }
 
+void rasterizeTallWalls()
+{
+    constexpr int w = 3, h = 841;
+    constexpr std::uint32_t background = 0x123456ff;
+    for (int textureHeight : {0, 74, 113}) {
+        vortex::Texture texture{3, textureHeight, std::vector<vortex::Rgb>(3 * textureHeight)};
+        for (int y = 0; y < textureHeight; ++y)
+            texture.pixels[std::size_t(y) * texture.width + 1] = {
+                std::uint8_t(y * 29), std::uint8_t(y * 13), std::uint8_t(y)};
+        for (const auto [top, bottom] : {std::pair{-98.5, 607.5}, {101.5, 1021.5}}) {
+            const vortex::ProjectedColumn projected{0, 0, 37, top, bottom};
+            const std::pair<int, int> expected = top < 0 ? std::pair{0, 607} : std::pair{101, h};
+            std::vector<std::uint32_t> pixels(w * h, background);
+            std::vector<double> distances(w * h, 91);
+            for (int column : {0, 1}) {
+                expect(vortex::rasterizeWallColumn(pixels, w, h, column, 42, projected,
+                           textureHeight ? &texture : nullptr, 1, {140, 21, 43}, &distances) == expected,
+                       "Tall wall clipping changed");
+            }
+            for (int y = 0; y < h; ++y) {
+                const auto offset = std::size_t(y) * w;
+                expect(pixels[offset] == pixels[offset + 1] && pixels[offset + 2] == background,
+                       "Tall wall traversal changed a pixel");
+                if (y < expected.first || y >= expected.second)
+                    expect(pixels[offset] == background, "Tall wall wrote outside the clipped rows");
+                expect(distances[offset] == 42 && distances[offset + 1] == 42 &&
+                       distances[offset + 2] == 91, "Tall wall depth changed");
+            }
+        }
+    }
+}
+
 void applyFisheye()
 {
     vortex::FisheyeEffect identity{{1.2, -0.0}};
@@ -216,6 +248,7 @@ int main()
         renderScene();
         renderPlaneCoverage();
         applyFisheye();
+        rasterizeTallWalls();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
