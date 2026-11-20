@@ -14,25 +14,28 @@ bool FisheyeEffect::apply(std::vector<std::uint32_t>& pixels, int width, int hei
     if (width < 2 || height < 2 || pixels.size() != std::size_t(width) * height)
         return false;
 
-    if (width_ != width || height_ != height || lookup_.size() != pixels.size()) {
-        const auto [pixelAspect, strength] = settings_;
+    const auto [pixelAspect, strength] = settings_;
+    const bool identity = strength == 0.0;
+    if (identity || width_ != width || height_ != height || lookup_.size() != pixels.size()) {
         if (!(pixelAspect > 0.0 && strength >= 0.0 && strength <= 1.0))
             return false;
         const double cx = (width - 1) * 0.5, cy = (height - 1) * 0.5;
         const double extent2 = cx * cx * pixelAspect * pixelAspect + cy * cy;
         if (extent2 <= 0.0 || !std::isfinite(extent2)) return false;
-        lookup_.resize(pixels.size());
-        for (int y = 0; y < height; ++y) {
-            const double dy = y - cy;
-            for (int x = 0; x < width; ++x) {
-                const double dx = x - cx;
-                const double radius2 = (dx * dx * pixelAspect * pixelAspect + dy * dy) / extent2;
-                // Radial barrel warp. At all corners scale=1; no black borders,
-                // repeated edge columns or out-of-bounds sampling.
-                const double scale = 1.0 - strength * (1.0 - std::min(radius2, 1.0));
-                const int sampleX = std::clamp(int(std::lround(cx + dx * scale)), 0, width - 1);
-                const int sampleY = std::clamp(int(std::lround(cy + dy * scale)), 0, height - 1);
-                lookup_[std::size_t(y) * width + x] = std::size_t(sampleY) * width + sampleX;
+        if (!identity) {
+            lookup_.resize(pixels.size());
+            for (int y = 0; y < height; ++y) {
+                const double dy = y - cy;
+                for (int x = 0; x < width; ++x) {
+                    const double dx = x - cx;
+                    const double radius2 = (dx * dx * pixelAspect * pixelAspect + dy * dy) / extent2;
+                    // Radial barrel warp. At all corners scale=1; no black borders,
+                    // repeated edge columns or out-of-bounds sampling.
+                    const double scale = 1.0 - strength * (1.0 - std::min(radius2, 1.0));
+                    const int sampleX = std::clamp(int(std::lround(cx + dx * scale)), 0, width - 1);
+                    const int sampleY = std::clamp(int(std::lround(cy + dy * scale)), 0, height - 1);
+                    lookup_[std::size_t(y) * width + x] = std::size_t(sampleY) * width + sampleX;
+                }
             }
         }
         width_ = width;
@@ -49,8 +52,13 @@ bool FisheyeEffect::apply(std::vector<std::uint32_t>& pixels, int width, int hei
     const auto* source = pixels.data();
     const auto* lookup = lookup_.data();
     auto* destination = destination_.data();
-    for (std::size_t i = 0; i < count; ++i)
-        destination[i] = source[lookup[i]];
+    if (identity) {
+        // Copy into the alternate buffer so identity preserves the buffer exchange.
+        std::copy_n(source, count, destination);
+    } else {
+        for (std::size_t i = 0; i < count; ++i)
+            destination[i] = source[lookup[i]];
+    }
     // Publish the warped frame and retain the old storage for the next draw.
     pixels.swap(destination_);
     return true;

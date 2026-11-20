@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <vector>
 
@@ -66,6 +68,58 @@ void renderPlaneCoverage()
                 expect(actual == expected, "Wall coverage changed plane pixels or overwrote a wall");
             }
         }
+    }
+}
+
+void applyFisheye()
+{
+    vortex::FisheyeEffect identity{{1.2, -0.0}};
+    vortex::FisheyeEffect warp{{0.8, 1.0}};
+    std::vector<std::uint32_t> pixels;
+    for (const auto [w, h] : {std::pair{11, 7}, {7, 11}, {8, 6}, {11, 7}}) {
+        std::vector<std::uint32_t> input(std::size_t(w) * h);
+        std::iota(input.begin(), input.end(), 0u);
+        auto expected = input;
+        vortex::FisheyeEffect freshWarp{{0.8, 1.0}};
+        expect(freshWarp.apply(expected, w, h) && expected != input, "Fisheye fixture must warp");
+        for (auto* effect : {&identity, &warp, &identity, &warp}) {
+            pixels = input;
+            expect(effect->apply(pixels, w, h) && pixels == (effect == &identity ? input : expected),
+                   "Fisheye changed output when switching effects or dimensions");
+        }
+    }
+
+    const auto original = pixels;
+    pixels.reserve(pixels.size() + 100);
+    const auto inputCapacity = pixels.capacity();
+    const auto* storage = pixels.data();
+    expect(identity.apply(pixels, 11, 7) && pixels == original && pixels.data() != storage,
+           "Identity must publish the alternate buffer");
+    expect(identity.apply(pixels, 11, 7) && pixels == original &&
+           pixels.data() == storage && pixels.capacity() == inputCapacity,
+           "Identity must return the original storage on the next frame");
+    expect(!identity.apply(pixels, 1, 77) && !identity.apply(pixels, 11, 8) &&
+           pixels == original && pixels.data() == storage,
+           "Invalid dimensions must preserve the framebuffer and its storage");
+    for (double aspect : {0.0, std::numeric_limits<double>::infinity(),
+                          std::numeric_limits<double>::max()}) {
+        vortex::FisheyeEffect invalid{{aspect, 0.0}};
+        expect(!invalid.apply(pixels, 11, 7) && pixels == original && pixels.data() == storage,
+               "Identity must still validate the pixel aspect and the extent");
+    }
+
+    // On a 5x3 image, strength 0.625 maps (1,1) and (3,1) to x=1.5 and x=2.5.
+    for (const auto [strength, left, right] : {
+             std::array<double, 3>{0.625 - 1e-12, 6, 8},
+             std::array<double, 3>{0.625, 7, 8},
+             std::array<double, 3>{0.625 + 1e-12, 7, 7}}) {
+        std::vector<std::uint32_t> samples(15);
+        std::iota(samples.begin(), samples.end(), 0u);
+        vortex::FisheyeEffect rounding{{1.0, strength}};
+        expect(rounding.apply(samples, 5, 3) && samples[6] == left && samples[8] == right,
+               "Fisheye changed sampling at a rounding boundary");
+        expect(samples[0] == 0 && samples[4] == 4 && samples[10] == 10 && samples[14] == 14 &&
+               samples[7] == 7, "Fisheye moved a corner or the center pixel");
     }
 }
 
@@ -161,6 +215,7 @@ int main()
     try {
         renderScene();
         renderPlaneCoverage();
+        applyFisheye();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
