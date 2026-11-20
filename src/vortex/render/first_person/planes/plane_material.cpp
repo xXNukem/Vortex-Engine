@@ -3,9 +3,35 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+#include <limits>
 
 namespace vortex::plane_material {
 namespace {
+double tileRemainder(double world, double period)
+{
+#if defined(FP_FAST_FMA)
+    // With binary64, world and period share the period's binary lattice when
+    // |world| >= period. A remainder of magnitude less than period is exact.
+    if constexpr (std::numeric_limits<double>::is_iec559 &&
+                  std::numeric_limits<double>::radix == 2 &&
+                  std::numeric_limits<double>::digits == 53) {
+        const double magnitude = std::abs(world);
+        if (magnitude < period) return world;
+
+        // Bound the quotient before dividing. Rounding can reach the next
+        // integer at a tile boundary but cannot cross an entire tile.
+        if (magnitude * 0x1p-24 < period) {
+            const double tiles = std::floor(magnitude / period);
+            double remainder = std::fma(-tiles, period, magnitude);
+            if (remainder < 0)
+                remainder = std::fma(1 - tiles, period, magnitude);
+            return std::copysign(remainder, world);
+        }
+    }
+#endif
+    return std::fmod(world, period);
+}
+
 int coordinate(double world, int size, const Sampling& sampling)
 {
     // VORTEX_PLANE_UV_FASTPATH_V1: Index 128×128 textures directly
@@ -19,7 +45,7 @@ int coordinate(double world, int size, const Sampling& sampling)
         if (fraction > 1e-9 && fraction < 1.0 - 1e-9)
             return int(static_cast<std::uint64_t>(cell) & 127u);
     }
-    double wrapped = std::fmod(world, sampling.period);
+    double wrapped = tileRemainder(world, sampling.period);
     if (wrapped < 0) {
         wrapped += sampling.period;
         if (wrapped == sampling.period) return 0;

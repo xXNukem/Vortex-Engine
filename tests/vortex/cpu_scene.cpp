@@ -3,11 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -25,6 +27,54 @@ std::size_t pixel(int x, int y) { return std::size_t(y) * width + x; }
 void expect(bool condition, const char* failure)
 {
     if (!condition) throw std::runtime_error(failure);
+}
+
+int referenceTexel(double world, int size, double period)
+{
+    const double seam = std::min(1e-9, period * (1e-9 / 256.0));
+    double wrapped = std::fmod(world, period);
+    if (wrapped < 0) {
+        wrapped += period;
+        if (wrapped == period) return 0;
+    }
+    if (wrapped < seam || wrapped > period - seam) wrapped = 0;
+    return std::clamp(int(wrapped / period * size), 0, size - 1);
+}
+
+void samplePlaneTileBoundaries()
+{
+    const auto inf = std::numeric_limits<double>::infinity();
+    const auto check = [](double world, double period) {
+        const auto uv = vortex::plane_material::coordinates(world, -world, 37, 8191, period);
+        expect(uv.x == referenceTexel(world, 37, period) &&
+               uv.y == referenceTexel(-world, 8191, period),
+               "Plane sampling changed at a tile or texel boundary");
+    };
+
+    for (double period : {std::numeric_limits<double>::denorm_min() * 5,
+                          0x1.0000000000001p-980, 0.1, 19.25, 193.5, 256.0,
+                          640.0, 0x1.fffffffffffp980}) {
+        for (double tiles : {0.0, 1.0, 2.0, 19.0, 8191.0, 0x1p24 - 1, 0x1p24,
+                             0x1p24 + 1, 0x1p40}) {
+            for (double fraction : {0.0, 1.0 / 37, 3.0 / 8191, 0.5, 36.0 / 37}) {
+                const double world = period * (tiles + fraction);
+                for (double value : {std::nextafter(world, -inf), world,
+                                     std::nextafter(world, inf)})
+                    if (std::isfinite(value)) check(value, period);
+            }
+        }
+        check(std::numeric_limits<double>::max(), period);
+    }
+
+    std::mt19937_64 random(0x5eab2);
+    for (int i = 0; i < 20000; ++i) {
+        const auto mantissa = [&] { return 1 + double(random() >> 12) * 0x1p-52; };
+        const int exponent = int(random() % 2001) - 1000;
+        const int relativeExponent = int(random() % 81) - 32;
+        const double period = std::ldexp(mantissa(), exponent);
+        const double world = std::ldexp(mantissa(), exponent + relativeExponent);
+        if (std::isfinite(world)) check(world, period);
+    }
 }
 
 void renderPlaneCoverage()
@@ -247,6 +297,7 @@ int main()
     try {
         renderScene();
         renderPlaneCoverage();
+        samplePlaneTileBoundaries();
         applyFisheye();
         rasterizeTallWalls();
     } catch (const std::exception& error) {
