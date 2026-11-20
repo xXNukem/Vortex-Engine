@@ -1,4 +1,5 @@
 #include "vortex/render/first_person/scene_renderer.h"
+#include "vortex/render/first_person/planes/plane_renderer.h"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,50 @@ std::size_t pixel(int x, int y) { return std::size_t(y) * width + x; }
 void expect(bool condition, const char* failure)
 {
     if (!condition) throw std::runtime_error(failure);
+}
+
+void renderPlaneCoverage()
+{
+    const auto texture = [](int w, int h, int seed) {
+        vortex::Texture result{w, h, std::vector<vortex::Rgb>(std::size_t(w) * h)};
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x)
+                result.pixels[std::size_t(y) * w + x] = {
+                    std::uint8_t(x), std::uint8_t(y), std::uint8_t(seed)};
+        }
+        return result;
+    };
+    const vortex::PlaneBank fixed{texture(128, 128, 1), texture(128, 128, 2)};
+    const vortex::PlaneBank scalar{texture(7, 13, 3), texture(19, 5, 4)};
+    constexpr std::uint32_t wall = 0x112233ff;
+    for (const auto [w, h] : {std::pair{96, 40}, {97, 51}}) {
+        const vortex::planes::Projection projection{w, h, w * 0.625, 12, 28};
+        std::vector<std::pair<int, int>> coverage(w);
+        for (int x = 0; x < w; ++x) {
+            const int edge = x % 5;
+            coverage[x] = {h, 0}; // No hit.
+            if (x < 32) coverage[x] = {-edge, h + edge};
+            if (x >= 32 && x < 64 && x % 3 != 0) coverage[x] = {6 + edge, h - edge - 1};
+            if (x == w - 1) coverage[x] = {h / 2 - 1, h / 2 + 2};
+        }
+        for (double period : {640.0, 256.0, 19.25}) {
+            const auto& materials = period < 256 ? scalar : fixed;
+            for (double angle : {0.0, 0.517}) {
+                const vortex::CameraPose camera{-period, -2 * period - 0.125, angle};
+                std::vector<std::uint32_t> expected(std::size_t(w) * h, wall);
+                auto actual = expected;
+                vortex::planes::render(expected, camera, projection, materials, period);
+                for (int x = 0; x < w; ++x) {
+                    for (int y = 0; y < h; ++y) {
+                        if (y >= coverage[x].first && y < coverage[x].second)
+                            expected[std::size_t(y) * w + x] = wall;
+                    }
+                }
+                vortex::planes::render(actual, camera, projection, materials, period, &coverage);
+                expect(actual == expected, "Wall coverage changed plane pixels or overwrote a wall");
+            }
+        }
+    }
 }
 
 void renderScene()
@@ -115,6 +160,7 @@ int main()
 {
     try {
         renderScene();
+        renderPlaneCoverage();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

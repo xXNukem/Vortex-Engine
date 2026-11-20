@@ -2,13 +2,58 @@
 
 #include "plane_sampling.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace vortex::planes {
 namespace {
-void renderRow(std::uint32_t* pixels, int width, int y, Row row,
+constexpr int blockWidth = 32;
+
+struct CoverageBlock {
+    int outerBegin, outerEnd;
+    int innerBegin, innerEnd;
+
+    enum class Visibility { Visible, Hidden, Mixed };
+
+    Visibility visibility(int y) const
+    {
+        if (y < outerBegin || y >= outerEnd) return Visibility::Visible;
+        if (y >= innerBegin && y < innerEnd) return Visibility::Hidden;
+        return Visibility::Mixed;
+    }
+};
+
+template <bool CheckCoverage>
+void renderSpan(std::uint32_t* pixels, int begin, int end, int y, const Row& row,
+                const Texture& texture, const plane_material::Sampling& sampling,
+                const std::pair<int, int>* coverage, bool fixedPoint, unsigned guard,
+                std::uint64_t u, std::uint64_t v, std::uint64_t du, std::uint64_t dv)
+{
+    // Unsigned arithmetic reproduces one accumulator addition for every skipped column.
+    u += std::uint64_t(begin) * du;
+    v += std::uint64_t(begin) * dv;
+    const auto* source = texture.pixels.data();
+    for (int x = begin; x < end; ++x, u += du, v += dv) {
+        if constexpr (CheckCoverage) {
+            if (y >= coverage[x].first && y < coverage[x].second) continue;
+        }
+        plane_material::Texel uv;
+        if (fixedPoint && std::uint32_t(u + guard) > 2 * guard &&
+                          std::uint32_t(v + guard) > 2 * guard) {
+            uv = {int((u >> 32) & 127), int((v >> 32) & 127)};
+        } else {
+            uv = plane_material::coordinates(row.x + x * row.stepX, row.y + x * row.stepY,
+                                             texture.width, texture.height, sampling);
+        }
+        const auto rgb = source[uv.y * std::size_t(texture.width) + uv.x];
+        pixels[x] = (std::uint32_t(rgb.r) << 24) | (std::uint32_t(rgb.g) << 16) |
+                    (std::uint32_t(rgb.b) << 8) | 255;
+    }
+}
+
+void renderRow(std::uint32_t* pixels, int width, int y, const Row& row,
                const Texture& texture, const plane_material::Sampling& sampling,
-               const std::vector<std::pair<int,int>>* wallCoverage)
+               const std::pair<int, int>* coverage, const std::vector<CoverageBlock>& blocks)
 {
     // A 32.32 texel accumulator leaves
     // less than one low bit of truncation error per column (including origin).
@@ -34,21 +79,27 @@ void renderRow(std::uint32_t* pixels, int width, int y, Row row,
     // In low-word units, width + 1 covers accumulated truncation.
     // Another 16 covers double rounding and the sampler's 1e-9 texel guard.
     const unsigned guard = unsigned(width) + 16;
-    const auto* source = texture.pixels.data();
-    const auto* coverage = wallCoverage ? wallCoverage->data() : nullptr;
-    for (int x = 0; x < width; ++x, u += du, v += dv) {
-        if (coverage && y >= coverage[x].first && y < coverage[x].second) continue;
-        plane_material::Texel uv;
-        if (fixedPoint && std::uint32_t(u + guard) > 2 * guard &&
-                          std::uint32_t(v + guard) > 2 * guard) {
-            uv = {int((u >> 32) & 127), int((v >> 32) & 127)};
-        } else {
-            uv = plane_material::coordinates(row.x + x * row.stepX, row.y + x * row.stepY,
-                                             texture.width, texture.height, sampling);
+    if (blocks.empty()) {
+        renderSpan<false>(pixels, 0, width, y, row, texture, sampling, coverage,
+                          fixedPoint, guard, u, v, du, dv);
+        return;
+    }
+    int begin = 0;
+    for (std::size_t i = 0; i < blocks.size();) {
+        using Visibility = CoverageBlock::Visibility;
+        const auto visibility = blocks[i].visibility(y);
+        do {
+            ++i;
+        } while (i < blocks.size() && blocks[i].visibility(y) == visibility);
+        const int end = i == blocks.size() ? width : int(i) * blockWidth;
+        if (visibility == Visibility::Visible) {
+            renderSpan<false>(pixels, begin, end, y, row, texture, sampling, coverage,
+                              fixedPoint, guard, u, v, du, dv);
+        } else if (visibility == Visibility::Mixed) {
+            renderSpan<true>(pixels, begin, end, y, row, texture, sampling, coverage,
+                             fixedPoint, guard, u, v, du, dv);
         }
-        const auto rgb = source[uv.y * std::size_t(texture.width) + uv.x];
-        pixels[x] = (std::uint32_t(rgb.r) << 24) | (std::uint32_t(rgb.g) << 16) |
-                    (std::uint32_t(rgb.b) << 8) | 255;
+        begin = end;
     }
 }
 } // namespace
@@ -80,12 +131,34 @@ void render(std::vector<std::uint32_t>& pixels, const CameraPose& camera,
     if (wallCoverage && wallCoverage->size() != std::size_t(p.width)) return;
     if (!(repeatPeriod > 0.0) || !std::isfinite(repeatPeriod)) return;
     const auto sampling = plane_material::makeSampling(repeatPeriod);
+    std::vector<CoverageBlock> blocks;
+    if (wallCoverage) {
+        blocks.reserve(1 + (p.width - 1) / blockWidth);
+        for (int begin = 0; begin < p.width;) {
+            const int end = begin + std::min(blockWidth, p.width - begin);
+            // The envelope excludes empty intervals. The intersection includes
+            // them so one uncovered column prevents rejecting the whole block.
+            CoverageBlock block{p.height, 0, 0, p.height};
+            for (int x = begin; x < end; ++x) {
+                const auto [top, bottom] = (*wallCoverage)[x];
+                block.innerBegin = std::max(block.innerBegin, top);
+                block.innerEnd = std::min(block.innerEnd, bottom);
+                if (top < bottom) {
+                    block.outerBegin = std::min(block.outerBegin, top);
+                    block.outerEnd = std::max(block.outerEnd, bottom);
+                }
+            }
+            blocks.push_back(block);
+            begin = end;
+        }
+    }
+    const auto* coverage = wallCoverage ? wallCoverage->data() : nullptr;
     for (int y = 0; y < p.height; ++y) {
         const auto row = projectRow(camera, p, y);
         if (!row) continue;
         const auto& texture = plane_material::select(materials, row->ceiling);
         if (validTexture(texture)) renderRow(pixels.data() + std::size_t(y) * p.width,
-                                       p.width, y, *row, texture, sampling, wallCoverage);
+                                       p.width, y, *row, texture, sampling, coverage, blocks);
     }
 }
 } // namespace vortex::planes
