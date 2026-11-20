@@ -84,13 +84,17 @@ struct Geometry {
     std::uint16_t material;
 };
 
-enum class SpriteSet { Default, Large, Transparent, Small, Overlap, Partial, Hidden, Offscreen };
+enum class SpriteSet {
+    Default, Large, Transparent, Small, Overlap, OpaqueOverlap, Partial, Hidden, Offscreen, Few, Layers
+};
 
 struct Case {
     const char* name;
     double nearWall, farWall, height, strength;
     bool dense, scalar, sprites, partial, grid, effect;
     SpriteSet spriteSet = SpriteSet::Default;
+    bool planes = true;
+    int wallRows = 74;
 };
 
 constexpr Case cases[] = {
@@ -106,9 +110,27 @@ constexpr Case cases[] = {
      SpriteSet::Transparent},
     {"small", 300, 1800, 100, 0, false, false, true, true, true, false, SpriteSet::Small},
     {"overlap", 300, 1800, 100, 0, false, false, true, true, true, false, SpriteSet::Overlap},
+    {"opaque-overlap", 300, 1800, 100, 0, false, false, true, true, true, false,
+     SpriteSet::OpaqueOverlap, false},
     {"partial", 95, 1800, 100, 0, false, false, true, true, true, false, SpriteSet::Partial},
     {"hidden", 29, 1800, 100, 0, false, false, true, false, true, false, SpriteSet::Hidden},
     {"offscreen", 300, 1800, 100, 0, false, false, true, true, true, false, SpriteSet::Offscreen},
+    {"w02-walls", 110, 900, 96, 0, false, false, false, false, true, false,
+     SpriteSet::Default, false, 74},
+    {"w02-few", 160, 900, 96, 0, false, false, true, false, true, false,
+     SpriteSet::Few, false, 128},
+    {"w02-overlap", 300, 900, 96, 0, false, false, true, false, true, false,
+     SpriteSet::Overlap, false, 74},
+    {"w02-tall", 27, 900, 120, 0, false, false, false, false, true, false,
+     SpriteSet::Default, false, 128},
+    {"w02-far", 980, 1750, 96, 0, false, false, false, false, false, false,
+     SpriteSet::Default, false, 57},
+    {"w02-mixed", 95, 1000, 96, .38, true, false, true, true, true, true,
+     SpriteSet::Default, true, 73},
+    {"w02-hidden", 29, 900, 100, 0, false, false, true, false, true, false,
+     SpriteSet::Hidden, false, 74},
+    {"w02-layers", 240, 900, 96, 0, false, false, true, true, true, true,
+     SpriteSet::Layers, true, 128},
 };
 
 std::vector<Geometry> makeGeometry(const Case& scene)
@@ -273,6 +295,24 @@ void verifyDirectSprites(Frames& frames)
         frames.vector(pixels);
         frames.vector(depth);
     }
+
+    // Opaque coverage with live depth, wall-gated columns, and later equal-depth overlays.
+    const std::vector<sprites::Instance> overlapping{
+        {55, 0, 4, 85, 2},
+        {55, 0, 4, 85, 2, true},
+        {65, 0, 4, 85, 0},
+        {65, 0, 39, 85, 1},
+        {65, 25, 4, 85, 0},
+        {55, 0, 4, 85, 1, true, true, false, true},
+        {39, 15, 9, 48, 1, true, true},
+    };
+    std::vector<std::uint32_t> pixels(width * height, 0x12345678);
+    std::vector<double> depth(pixels.size());
+    for (std::size_t i = 0; i < depth.size(); ++i) depth[i] = columns[i % width];
+    sprites::render(pixels, depth, bank, overlapping, {0, 0, 0},
+                    {width, height, 168.5, 25, columns.data()}, sprites::DepthInput::NoNaN);
+    frames.vector(pixels);
+    frames.vector(depth);
 }
 
 void measure(const Case& scene, int width, int height, int samples, Frames* frames)
@@ -285,6 +325,8 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
     prepared.walls.reserve(walls.size());
     prepared.dynamicSurfaces.reserve(1);
     Materials materials;
+    if (scene.wallRows != materials.tall.height)
+        materials.tall = pattern(48, scene.wallRows, 17);
     const PlaneBank planes{scene.scalar ? pattern(37, 65, 25) : pattern(128, 128, 25),
                            scene.scalar ? pattern(8, 9, 107) : pattern(128, 128, 107)};
     const auto bank = makeSprites();
@@ -300,6 +342,12 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
     switch (scene.spriteSet) {
     case SpriteSet::Default:
         break;
+    case SpriteSet::Few:
+        objects.push_back({74, -19, 9, 32, 0});
+        objects.push_back({78, 26, 8, 38, 2});
+        break;
+    case SpriteSet::Layers:
+        break;
     case SpriteSet::Large:
         objects.push_back({36, 0, 2, 98, 2});
         break;
@@ -310,6 +358,10 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
         for (int i = 0; i < 768; ++i)
             objects.push_back({500.0 + i % 19 * 43, (i % 51 - 25) * 18.0,
                                (i % 9) * 12.0, 8.0 + i % 7, std::size_t(i % 3)});
+        break;
+    case SpriteSet::OpaqueOverlap:
+        for (int i = 0; i < 96; ++i)
+            objects.push_back({55.0 + i, 0, 12, 70, 2});
         break;
     case SpriteSet::Overlap:
         for (int i = 0; i < 96; ++i)
@@ -326,12 +378,22 @@ void measure(const Case& scene, int width, int height, int samples, Frames* fram
                                6, 68, std::size_t(i % 3)});
         break;
     }
-    const SpriteLayer layers[] = {{&bank, &objects}, {&bank, &overlays}};
+    std::vector<SpriteLayer> layers{{&bank, &objects}, {&bank, &overlays}};
+    std::array<std::vector<sprites::Instance>, 8> stacked;
+    if (scene.spriteSet == SpriteSet::Layers) {
+        layers.clear();
+        for (std::size_t i = 0; i < stacked.size(); ++i) {
+            const double distance = 95.0 - 7.0 * i;
+            stacked[i].push_back({distance, 3, 5, 60, i % 3});
+            stacked[i].push_back({distance, 3, 5, 60, 1, false, false, false, true});
+            layers.push_back({&bank, &stacked[i]});
+        }
+    }
     FisheyeEffect effect({1.17, scene.strength});
     LayerObservation observation;
     SceneStyle style{wallMaterial, &materials, 0x5072a4ff, 0x17161cff,
-                     &planes, scene.scalar ? 193.5 : 384.0,
-                     layers, scene.sprites ? 2u : 0u, scene.effect ? &effect : nullptr,
+                     scene.planes ? &planes : nullptr, scene.scalar ? 193.5 : 384.0,
+                     layers.data(), scene.sprites ? layers.size() : 0, scene.effect ? &effect : nullptr,
                      layerObservation, &observation};
     std::vector<std::uint32_t> pixels;
     RenderBuffers buffers;
@@ -408,29 +470,31 @@ try {
     timing = timing || render_profile::probeEnabled;
 #endif
     if ((!timing && mode != "write" && mode != "verify") || argc > 4 ||
-        (!timing && argc != 3)) return 1;
+        (!timing && argc < 3)) return 1;
     const int samples = timing && argc >= 3 ? std::stoi(argv[2]) : 31;
     if (samples < 1) return 1;
-    const auto filter = argc == 4 ? std::string_view(argv[3]) : std::string_view{};
+    const std::string_view filter = argc == 4 ? argv[3] : "";
     Frames frames = timing ? Frames{} : Frames{mode, argv[2]};
     if (timing) {
         std::cout << "scene,width,height,sample,prepare_ns,total_ns,layer_sprite_ns";
 #ifdef VORTEX_RENDER_PROFILE
         std::cout << ",setup_ns,rays_ns,projection_ns,material_ns,walls_ns,planes_ns,depth_ns,"
                      "sprites_ns,fisheye_ns,sprite_project_ns,sprite_clip_ns,sprite_runs_ns,"
-                     "sprite_raster_ns,projected,empty_rect,wall_columns,hidden_rects,"
+                     "sprite_raster_ns,depth_init_ns,depth_expand_ns,depth_columns_ns,"
+                     "projected,empty_rect,wall_columns,hidden_rects,"
                      "transparent_pixels,depth_tests,depth_rejects,stores,"
                      "gate_calls,gate_samples,gate_probe_ns,gate_clock_ns,"
                      "texel_calls,texel_samples,texel_probe_ns,texel_clock_ns,"
                      "write_calls,write_samples,write_probe_ns,write_clock_ns,"
+                     "column_gate_calls,column_gate_samples,column_gate_probe_ns,column_gate_clock_ns,"
                      "retained_bytes,transient_bytes,allocations,grid_bytes";
 #endif
         std::cout << '\n';
     }
     for (const auto [width, height] : {std::pair{320, 200}, {640, 400}, {1280, 720},
-                                      {1920, 1080}, {2560, 1440}, {3840, 2160}, {641, 481}}) {
+                                      {1920, 1080}, {2560, 1440}, {3840, 2160}, {641, 481}, {1279, 721}}) {
         for (const auto& scene : cases) {
-            if ((timing && width == 641) || (!filter.empty() && filter != scene.name))
+            if (std::string_view(scene.name).substr(0, filter.size()) != filter)
                 continue;
             measure(scene, width, height, samples, timing ? nullptr : &frames);
         }

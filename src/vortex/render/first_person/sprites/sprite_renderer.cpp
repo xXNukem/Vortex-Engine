@@ -27,10 +27,16 @@ int clippedEdge(double value, int limit)
     return int(std::ceil(std::clamp(value - 0.5, 0.0, double(limit))));
 }
 
+struct Occluder {
+    int x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    double depth = 0;
+    std::size_t area = 0;
+};
+
 template<bool noNaN, bool overlaySpriteAtEqualDepth = false>
 void drawObject(std::vector<std::uint32_t>& pixels, std::vector<double>& depth,
                 const Instance& object, const Image& image, const Rectangle& rect,
-                const Projection& projection)
+                const Projection& projection, Occluder& occluder)
 {
     const auto& texture = image.texture;
     int x0, x1, y0, y1;
@@ -73,6 +79,20 @@ void drawObject(std::vector<std::uint32_t>& pixels, std::vector<double>& depth,
     const bool flipX = object.flipX;
     const bool flipY = object.flipY;
     if (!wallSurface) {
+        if constexpr (noNaN && !overlaySpriteAtEqualDepth) {
+            if (x0 >= occluder.x0 && x1 <= occluder.x1 &&
+                y0 >= occluder.y0 && y1 <= occluder.y1 && rect.depth >= occluder.depth) {
+                VORTEX_WORK(HiddenRects, 1);
+                return;
+            }
+            const auto area = std::size_t(x1 - x0) * (y1 - y0);
+            // An opaque sprite caps live depth throughout its clipped rectangle.
+            // Failed depth tests (including the wall gate) already satisfy the cap.
+            if (area > image.indices.size() && area >= occluder.area &&
+                (occluder.area == 0 || rect.depth <= occluder.depth) &&
+                std::find(image.indices.begin(), image.indices.end(), 0) == image.indices.end())
+                occluder = {x0, x1, y0, y1, rect.depth, area};
+        }
         // Reuse the exact pixel-center sampling across rows. Magnified texels
         // form horizontal runs that share one transparency test and color.
         struct Run { int begin, end, u; };
@@ -85,7 +105,7 @@ void drawObject(std::vector<std::uint32_t>& pixels, std::vector<double>& depth,
             for (int x = x0; x < x1; ++x) {
                 // Earlier sprites can only decrease depth. A wall-hidden column
                 // therefore rejects this sprite on every row.
-                if (limit && VORTEX_PROBE(SpriteGate, objectDepth >= limit[x])) {
+                if (limit && VORTEX_PROBE(SpriteColumnGate, objectDepth >= limit[x])) {
                     VORTEX_WORK(WallColumns, 1);
                     continue;
                 }
@@ -249,6 +269,7 @@ void render(std::vector<std::uint32_t>& pixels, std::vector<double>& depth,
         pixels.size() != std::size_t(projection.width) * projection.height ||
         depth.size() != pixels.size()) return;
     const auto draw = depthInput == DepthInput::NoNaN ? drawObject<true> : drawObject<false>;
+    Occluder occluder;
     for (const auto& object : objects) {
         if (object.image >= bank.images.size()) continue;
         const auto& image = bank.images[object.image];
@@ -259,9 +280,9 @@ void render(std::vector<std::uint32_t>& pixels, std::vector<double>& depth,
         if (!rectangle) continue;
         VORTEX_WORK(Projected, 1);
         if (object.overlaySpriteAtEqualDepth && depthInput == DepthInput::NoNaN)
-            drawObject<true, true>(pixels, depth, object, image, *rectangle, projection);
+            drawObject<true, true>(pixels, depth, object, image, *rectangle, projection, occluder);
         else
-            draw(pixels, depth, object, image, *rectangle, projection);
+            draw(pixels, depth, object, image, *rectangle, projection, occluder);
     }
 }
 } // namespace vortex::sprites
