@@ -14,3 +14,17 @@ if(TARGET Vortex::AudioSDL)
     set_target_properties(vortex_audio_sdl_tests PROPERTIES CXX_EXTENSIONS NO)
     add_test(NAME vortex_audio_sdl COMMAND vortex_audio_sdl_tests)
 endif()
+
+option(VORTEX_BUILD_RENDER_BENCHMARK "Build the standalone CPU render benchmark" OFF)
+if(VORTEX_BUILD_RENDER_BENCHMARK)
+    foreach(target vortex_render_benchmark vortex_render_profile)
+        add_executable(${target} render_benchmark.cpp)
+        target_link_libraries(${target} PRIVATE Vortex::CPU)
+        set_target_properties(${target} PROPERTIES CXX_EXTENSIONS NO)
+    endforeach()
+    target_sources(vortex_render_profile PRIVATE
+        ../../src/vortex/render/first_person/scene_renderer.cpp
+        ../../src/vortex/render/first_person/sprites/sprite_renderer.cpp)
+    target_include_directories(vortex_render_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(vortex_render_profile PRIVATE VORTEX_RENDER_PROFILE)
+endif()

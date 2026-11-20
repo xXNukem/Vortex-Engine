@@ -7,6 +7,12 @@
 #include <cmath>
 #include <limits>
 
+#ifdef VORTEX_RENDER_PROFILE
+#include "render_profile.h"
+#else
+#define VORTEX_MEASURE(phase)
+#endif
+
 #ifdef __APPLE__
 #include <cstring>
 #endif
@@ -37,20 +43,24 @@ bool walkColumns(const View& view, Visitor visit, const Timing& timing)
     const Point origin{view.camera.x, view.camera.y};
     double backtrack = 0;
     {
+        VORTEX_MEASURE(Rays);
         const Sample<Timed> sample(timing, Stage::Rays);
         if (view.grid) backtrack = view.grid->backtrack(origin);
     }
 
     for (int column = 0; column < p.width; ++column) {
-        const auto direction = columnRay(p, column);
         const auto hit = [&] {
+            VORTEX_MEASURE(Rays);
+            const auto direction = columnRay(p, column);
             const Sample<Timed> sample(timing, Stage::Rays);
             return view.grid ? view.grid->cast(view.scene, origin, direction, backtrack)
                              : castPreparedSceneRay(view.scene, direction);
         }();
         if (!std::isfinite(hit.distance)) continue;
-        const auto projected = projectWall(p.height, p.focal, p.eyeHeight,
-                                           view.wallHeight, hit.distance);
+        const auto projected = [&] {
+            VORTEX_MEASURE(Projection);
+            return projectWall(p.height, p.focal, p.eyeHeight, view.wallHeight, hit.distance);
+        }();
         if (!visit(column, hit, projected)) return false;
     }
     return true;
@@ -63,36 +73,53 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
     const auto& p = view.projection;
     if (p.width <= 0 || p.height <= 0) return false;
 
-    pixels.resize(std::size_t(p.width) * p.height);
-    fillBackground(pixels, p.width, p.height, style.ceilingColor, style.floorColor);
     const bool requiresDepth = style.layerCount != 0;
     auto& depth = buffers.depth;
+    {
+        VORTEX_MEASURE(Setup);
+        pixels.resize(std::size_t(p.width) * p.height);
+        fillBackground(pixels, p.width, p.height, style.ceilingColor, style.floorColor);
+    }
     if (requiresDepth) {
+        VORTEX_MEASURE(Depth);
         depth.resize(pixels.size());
         // The first row holds the nearest wall distance until all walls are drawn.
         std::fill_n(depth.begin(), p.width, std::numeric_limits<double>::infinity());
     }
-    if (style.planes) buffers.wallCoverage.assign(std::size_t(p.width), {p.height, 0});
+
+    if (style.planes) {
+        VORTEX_MEASURE(Setup);
+        buffers.wallCoverage.assign(std::size_t(p.width), {p.height, 0});
+    }
 
     walkColumns<Timed>(view, [&](int column, const RayHit& hit, const ProjectedColumn& projected) {
-        const auto material = style.wallMaterial
-            ? style.wallMaterial(style.wallContext, hit) : WallSample{};
+        const auto material = [&] {
+            VORTEX_MEASURE(Material);
+            return style.wallMaterial ? style.wallMaterial(style.wallContext, hit) : WallSample{};
+        }();
         const Sample<Timed> sample(timing, Stage::Walls);
-        const auto rows = rasterizeWallColumn(pixels, p.width, p.height, column, hit.distance,
-                                             projected, material.texture, material.textureX,
-                                             material.color);
-        if (requiresDepth) depth[column] = hit.distance;
+        const auto rows = [&] {
+            VORTEX_MEASURE(Walls);
+            return rasterizeWallColumn(pixels, p.width, p.height, column, hit.distance,
+                                       projected, material.texture, material.textureX, material.color);
+        }();
+        if (requiresDepth) {
+            VORTEX_MEASURE(Depth);
+            depth[column] = hit.distance;
+        }
         if (style.planes) buffers.wallCoverage[column] = rows;
         return true;
     }, timing);
 
     if (requiresDepth) {
+        VORTEX_MEASURE(Depth);
         const Sample<Timed> sample(timing, Stage::Walls);
         for (int y = 1; y < p.height; ++y)
             std::copy_n(depth.data(), p.width, depth.data() + std::size_t(y) * p.width);
     }
 
     if (style.planes) {
+        VORTEX_MEASURE(Planes);
         const Sample<Timed> sample(timing, Stage::Planes);
         planes::render(pixels, view.camera,
                        {p.width, p.height, view.planeAndSpriteFocal, p.eyeHeight, view.wallHeight},
@@ -101,7 +128,11 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
 
     const Sample<Timed> sample(timing, Stage::Sprites);
     if (requiresDepth) {
-        buffers.wallDepthColumns.assign(depth.data(), depth.data() + p.width);
+        {
+            VORTEX_MEASURE(Depth);
+            buffers.wallDepthColumns.assign(depth.data(), depth.data() + p.width);
+        }
+        VORTEX_MEASURE(Sprites);
         const sprites::Projection projection{p.width, p.height, view.planeAndSpriteFocal,
                                              p.eyeHeight, buffers.wallDepthColumns.data()};
         for (std::size_t i = 0; i < style.layerCount; ++i) {
@@ -114,6 +145,7 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
         }
     }
 
+    VORTEX_MEASURE(Fisheye);
     return !style.fisheye || style.fisheye->apply(pixels, p.width, p.height);
 }
 
