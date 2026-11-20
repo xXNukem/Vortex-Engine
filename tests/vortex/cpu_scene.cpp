@@ -125,14 +125,17 @@ void rasterizeTallWalls()
 {
     constexpr int w = 3, h = 841;
     constexpr std::uint32_t background = 0x123456ff;
-    for (int textureHeight : {0, 74, 113}) {
+    for (int textureHeight : {0, 1, 57, 74, 113, 128, 193}) {
         vortex::Texture texture{3, textureHeight, std::vector<vortex::Rgb>(3 * textureHeight)};
         for (int y = 0; y < textureHeight; ++y)
             texture.pixels[std::size_t(y) * texture.width + 1] = {
                 std::uint8_t(y * 29), std::uint8_t(y * 13), std::uint8_t(y)};
-        for (const auto [top, bottom] : {std::pair{-98.5, 607.5}, {101.5, 1021.5}}) {
+        for (const auto [top, bottom] : {std::pair{-98.5, 607.5}, {101.5, 1021.5},
+                                        {-3000.5, 5000.5}, {15.5, 207.5}}) {
             const vortex::ProjectedColumn projected{0, 0, 37, top, bottom};
-            const std::pair<int, int> expected = top < 0 ? std::pair{0, 607} : std::pair{101, h};
+            const std::pair<int, int> expected{
+                std::clamp(int(top - 0.5), 0, h), std::clamp(int(bottom - 0.5), 0, h)};
+            const double shade = vortex::distanceShade(projected.depth);
             std::vector<std::uint32_t> pixels(w * h, background);
             std::vector<double> distances(w * h, 91);
             for (int column : {0, 1}) {
@@ -144,8 +147,17 @@ void rasterizeTallWalls()
                 const auto offset = std::size_t(y) * w;
                 expect(pixels[offset] == pixels[offset + 1] && pixels[offset + 2] == background,
                        "Tall wall traversal changed a pixel");
-                if (y < expected.first || y >= expected.second)
-                    expect(pixels[offset] == background, "Tall wall wrote outside the clipped rows");
+                auto reference = background;
+                if (y >= expected.first && y < expected.second) {
+                    vortex::Rgb color{140, 21, 43};
+                    if (textureHeight) {
+                        const double v = (y + 0.5 - top) / (bottom - top);
+                        const int row = std::clamp(int(v * textureHeight), 0, textureHeight - 1);
+                        color = texture.pixels[std::size_t(row) * texture.width + 1];
+                    }
+                    reference = vortex::rgbaPixel(color, shade);
+                }
+                expect(pixels[offset] == reference, "Wall texel differs from per-pixel sampling");
                 expect(distances[offset] == 42 && distances[offset + 1] == 42 &&
                        distances[offset + 2] == 91, "Tall wall depth changed");
             }

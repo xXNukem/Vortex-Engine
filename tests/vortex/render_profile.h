@@ -6,14 +6,15 @@
 #include <cstdint>
 
 namespace vortex::render_profile {
-enum Phase { Setup, Rays, Projection, Material, Walls, Planes, Depth, Sprites, Fisheye, SpriteProject, SpriteClip, SpriteRuns, SpriteRaster, Count };
+enum Phase { Setup, Rays, Projection, Material, Walls, Planes, Depth, Sprites, Fisheye, SpriteProject, SpriteClip, SpriteRuns, SpriteRaster,
+             DepthInit, DepthExpand, DepthColumns, Count };
 using Clock = std::chrono::steady_clock;
 extern std::uint64_t times[Count];
 enum Work { Projected, EmptyRect, WallColumns, HiddenRects, TransparentPixels,
             DepthTests, DepthRejects, Stores, WorkCount };
 extern std::uint64_t work[WorkCount];
 
-enum Probe { SpriteGate, SpriteTexel, SpriteWrite, ProbeCount };
+enum Probe { SpriteGate, SpriteTexel, SpriteWrite, SpriteColumnGate, ProbeCount };
 struct ProbeReading {
     std::uint64_t calls = 0, samples = 0, elapsed = 0, clockPair = 0;
 };

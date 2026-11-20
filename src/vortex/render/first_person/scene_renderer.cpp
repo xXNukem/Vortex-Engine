@@ -82,6 +82,7 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
     }
     if (requiresDepth) {
         VORTEX_MEASURE(Depth);
+        VORTEX_MEASURE(DepthInit);
         depth.resize(pixels.size());
         // The first row holds the nearest wall distance until all walls are drawn.
         std::fill_n(depth.begin(), p.width, std::numeric_limits<double>::infinity());
@@ -113,6 +114,7 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
 
     if (requiresDepth) {
         VORTEX_MEASURE(Depth);
+        VORTEX_MEASURE(DepthExpand);
         const Sample<Timed> sample(timing, Stage::Walls);
         for (int y = 1; y < p.height; ++y)
             std::copy_n(depth.data(), p.width, depth.data() + std::size_t(y) * p.width);
@@ -130,6 +132,7 @@ bool renderScene(const View& view, const SceneStyle& style, std::vector<std::uin
     if (requiresDepth) {
         {
             VORTEX_MEASURE(Depth);
+            VORTEX_MEASURE(DepthColumns);
             buffers.wallDepthColumns.assign(depth.data(), depth.data() + p.width);
         }
         VORTEX_MEASURE(Sprites);
