@@ -13,6 +13,20 @@
 
 ---
 
+<div align="center">
+
+## Support the project
+
+If you'd like to support development:
+
+<a href="https://ko-fi.com/xxnukem"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support xXNukem on Ko-fi" height="48"></a>
+
+**[ko-fi.com/xxnukem](https://ko-fi.com/xxnukem)**
+
+</div>
+
+---
+
 ## Overview
 
 Vortex Engine is a set of C++17 libraries for software-rendered first-person games. It began as the rendering and audio code developed for [Extremis RE](https://github.com/xXNukem/Extremis-RE), an independent reconstruction of the DOS game *In Extremis*.
@@ -123,5 +137,3 @@ Vortex Engine is released under the [MIT License](LICENSE).
 **Development and maintenance:** Carlos de la Barrera Pérez ([xXNukem](https://github.com/xXNukem)).
 
 *In Extremis* and its original assets belong to their respective rights holders. No original game assets are distributed with Vortex Engine.
-
-Development can be supported via [Ko-fi](https://ko-fi.com/xxnukem).
