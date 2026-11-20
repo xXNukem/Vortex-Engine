@@ -41,3 +41,7 @@ After changing public headers, CMake target properties or installation rules, in
 - Automated tests do not establish identical behaviour across platforms, compilers and graphics display backends.
 
 For projects that require faithful reproduction of an older title, test Vortex's reusable functionality separately from the game-specific rules and resource decoders.
+
+## Multicore renderer validation
+
+The CPU scene tests compare the optional `first_person::RenderWorkers` path against the original renderer at several thread counts, checking pixel color, depth, wall coverage, sprite layering and callbacks for matching output. ThreadSanitizer and synthetic workload benchmarks were also run during MT01 development; these checks do not replace testing a consuming game and its graphics-presentation backend.

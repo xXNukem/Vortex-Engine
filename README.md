@@ -48,6 +48,10 @@ The renderer writes to a CPU framebuffer. Presenting that framebuffer in a windo
 
 The audio mixer operates on decoded samples. Original game sound formats and gameplay sound events are handled outside Vortex.
 
+### Optional multicore CPU rendering
+
+`Vortex::CPU` also exposes `vortex::first_person::RenderWorkers` for opt-in multicore rendering. Its workers are reused across frames; raycasting, wall rendering, planes, depth expansion, eligible sprite spans and fisheye work can be distributed without changing the existing single-threaded entry point. Small or order-sensitive work remains serial when appropriate. The call completes its work before returning, and the host retains ownership of scene data and framebuffers. See [rendering](docs/rendering.md) for the concurrency and callback contracts.
+
 ## Requirements
 
 - C++17-compatible compiler
@@ -111,6 +115,8 @@ An installation built with `VORTEX_ENABLE_SDL3=ON` also needs SDL3 discoverable 
 The [technical guide](docs/README.md) covers [architecture](docs/architecture.md),
 [rendering](docs/rendering.md), [audio](docs/audio.md),
 [CMake integration](docs/integration.md) and [tests](docs/testing.md).
+
+For device-input integration, see [SDL3 input](docs/input.md).
 
 ## Repository layout
 

@@ -85,3 +85,9 @@ The same sample model and `PlayOptions` are used by both routes. Decoding an ori
 | Event polling, dispatch, modal ownership and game bindings | Focus, relative mouse capture and keyboard and mouse state for the supplied window |
 
 Vortex originated in [Extremis RE](https://github.com/xXNukem/Extremis-RE), but the public libraries do not require that game's assets or application code. Their current use case is a raycasting-based first-person game; there is no claim of a general-purpose polygonal 3D renderer, scripting system or physics engine.
+
+## Multicore renderer ownership
+
+`first_person::RenderWorkers` is an optional, persistent worker pool inside `Vortex::CPU`. It reuses threads across frames and executes suitable render phases on disjoint color/depth regions. Small or order-sensitive tasks can remain on the caller, and the render call joins its work before returning. Ordered layers and observing callbacks preserve the caller-visible synchronization contract. No gameplay logic or SDL window ownership enters the CPU renderer. See [rendering](rendering.md).
+
+For the extracted device backend and host ownership contract, see [SDL3 input](input.md).

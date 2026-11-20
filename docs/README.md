@@ -2,13 +2,18 @@
 
 Vortex Engine exposes three C++17 libraries: a software first-person renderer, a PCM mixer, and an optional SDL3 audio output layer. This documentation describes the APIs available in the current source tree. It does not define a stable compatibility contract.
 
+In addition to the original three components described above, the current source tree includes the optional SDL3 input component `Vortex::InputSDL`.
+
 | Guide | Contents |
 |:--|:--|
 | [Architecture and ownership](architecture.md) | Library boundaries, data flow, application responsibilities and lifetime rules |
 | [Rendering](rendering.md) | Scene setup, rays, surfaces, textures, sprites, depth, planes and post-processing, with a compilable example |
 | [Audio](audio.md) | PCM sample format, voices, loops, mixer control and SDL3 playback, with examples |
+| [SDL3 input](input.md) | Optional keyboard and mouse input, context changes, focus, capture and host ownership |
 | [CMake integration](integration.md) | Build options, installation, imported targets and dependency handling |
 | [Tests and validation](testing.md) | What the included consumers verify, how to run them, and coverage limits |
+
+The rendering guide also covers optional `first_person::RenderWorkers` multicore execution and its synchronization requirements.
 
 ## Where to start
 

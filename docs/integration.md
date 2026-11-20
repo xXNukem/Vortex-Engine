@@ -111,3 +111,7 @@ When used across separate game repositories, prefer a dependency bound to a part
 - `Vortex::InputSDL` provides device input for a caller-owned SDL window. Event dispatch, context changes and action bindings belong to the consumer.
 
 The repository's `tests/vortex/CMakeLists.txt` provides examples of direct target linkage.
+
+## Multicore CPU dependency
+
+`first_person::RenderWorkers` is part of `Vortex::CPU`; consumers already linking that target do not need a separate render-worker CMake component. The single-threaded entry point remains available alongside the optional persistent worker path. See [rendering](rendering.md).
