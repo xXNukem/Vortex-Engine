@@ -133,9 +133,12 @@ The current implementation reflects the requirements of Extremis RE. In particul
 
 Future work will be driven by real integration requirements and compatibility testing. No stable API or compatibility guarantee is claimed at this stage.
 
-## Related project
+## Projects using Vortex Engine
 
-[**Extremis RE**](https://github.com/xXNukem/Extremis-RE) is the first project built around these systems. Its DOS resource readers, gameplay implementation, cinematics and other game-specific components are not part of Vortex Engine.
+- [**Extremis RE**](https://github.com/xXNukem/Extremis-RE) — the first project built around Vortex Engine, reconstructing *In Extremis* (1993). Its first public beta is available for macOS and Windows x64.
+- [**Wrath of Earth RE**](https://github.com/xXNukem/Wrath-of-Earth-RE) — the next announced reconstruction, based on the 1995 DOS science-fiction FPS *Wrath of Earth*. It is planned as the engine's second game and will help define reusable extensions for its different rendering and world-geometry requirements. Development has not yet begun.
+
+Game-specific DOS resource readers, gameplay implementations, cinematics and interfaces remain outside Vortex Engine. New features will be driven by verified integration requirements, preserving existing consumers.
 
 ## License and credits
 
